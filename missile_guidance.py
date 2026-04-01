@@ -230,16 +230,16 @@ def run_simulation():
     t = 0.0
     dt = 0.1
     dt_far = dt
-    dt_close = 0.01*dt
+    dt_close = 0.1*dt
     range_close = 1000.0
     t_max = 250.0
 
-    # MIM-104 Patriot parameters (PAC-2 variant)
+    # Parameters that ROUGHLY approximate MIM-104 Patriot PAC-2 variant
     missile_params = {
-        'T': 70.0e3, # Newtons
-        # 'T': 200.0e3, # Newtons
+        'T': 150.0e3, # Newtons
+        # 'T': 70.0e3, # Newtons
         'Isp': 240.0, # seconds
-        'Cd': 0.6,
+        'Cd': 0.3,
         'Aref': 0.132,
         'max_lat_accel': 35.0 * 9.81,
         'm_total': 900.0, # kg
@@ -264,7 +264,7 @@ def run_simulation():
 
     missile = Missile(missile_initial_state, missile_params, atmospheric_params)
 
-    # np.random.seed(8)
+    np.random.seed(7)
     target_position_xy = np.array([
         np.random.uniform(10000.0, 20000.0),
         np.random.uniform(10000.0, 20000.0),
@@ -278,13 +278,13 @@ def run_simulation():
     target_initial_state = {
         'x': target_position_xy[0],
         'y': target_position_xy[1],
-        'z': np.random.uniform(5000.0, 10000.0),
+        'z': np.random.uniform(10000.0, 20000.0),
         'vx': target_velocity_xy[0] + np.random.uniform(-100.0, 100.0),
         'vy': target_velocity_xy[1] + np.random.uniform(-100.0, 100.0),
         'vz':  np.random.uniform(-50.0, 50.0),
-        'wx': np.random.uniform(-0.02, 0.02),
-        'wy': np.random.uniform(-0.02, 0.02),
-        'wz': np.random.uniform(-0.02, 0.02),
+        'wx': np.random.uniform(-0.1, 0.1),
+        'wy': np.random.uniform(-0.1, 0.1),
+        'wz': np.random.uniform(-0.1, 0.1),
     }
 
     print("Initial Target State:", target_initial_state)
@@ -372,7 +372,7 @@ def run_simulation():
 
 def plot_metrics(missile_hist, target_hist):
     fig = plt.figure(figsize=(15, 10), constrained_layout=True)
-    fig.suptitle('Simulation Metrics', fontsize=14, weight='bold')
+    fig.suptitle('Missile Interception Metrics', fontsize=14, weight='bold')
 
     gs = fig.add_gridspec(3, 4, height_ratios=[1, 1, 1], hspace=0.08, wspace=0.08)
 
@@ -425,6 +425,8 @@ def plot_metrics(missile_hist, target_hist):
     ax.legend(loc='upper right')
 
     plt.show()
+    # # Save the figure as a PNG file
+    # fig.savefig('media/missile_interception_metrics.png', dpi=300)
 
 def animate_trajectories(missile_hist, target_hist, intercepted):
     """Animates the missile and target trajectories and overlays interception telemetry info."""
@@ -466,9 +468,14 @@ def animate_trajectories(missile_hist, target_hist, intercepted):
     los_line = ax.plot([], [], [], color='black', linestyle='--', linewidth=1.0, alpha=0.7)[0]
 
     # Interception telemetry text box
-    telemetry_text = ax.text2D(0.05, 0.90, "", transform=ax.transAxes, fontsize=11,
-                               color='black', fontfamily='monospace', verticalalignment='top',
-                               bbox=dict(facecolor='white', alpha=0.8, edgecolor='black'))
+    telemetry_text = fig.text(
+        0.02, 0.88, "",
+        fontsize=11,
+        color='black',
+        fontfamily='monospace',
+        verticalalignment='top',
+        bbox=dict(facecolor='white', alpha=0.8, edgecolor='black')
+    )
 
     ax.legend(loc="upper right")
 
@@ -533,6 +540,9 @@ def animate_trajectories(missile_hist, target_hist, intercepted):
         return target_line, missile_line, target_pt, missile_pt, los_line, target_vel_line, missile_vel_line, telemetry_text
 
     anim = animation.FuncAnimation(fig, update, frames=frames, interval=10, blit=False, repeat=False)
+    # # Save animation as a GIF file
+    # anim.save('media/missile_interception_animation.gif', writer='pillow', fps=15)
+
     plt.show()
 
 if __name__ == "__main__":
