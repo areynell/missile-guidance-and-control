@@ -1,5 +1,4 @@
 from enum import IntEnum
-from random import random
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -28,6 +27,8 @@ class TargetState(IntEnum):
 class Missile:
     """Represents a missile with physical parameters and state, as well as associated dynamics and guidance law."""
 
+    NUM_STATES = len(MissileState)
+
     def __init__(self, initial_state, missile_params, atmospheric_params):
         self.state = np.array([
             initial_state['x'],
@@ -38,9 +39,6 @@ class Missile:
             initial_state['vz'],
             initial_state['m']
         ], dtype=float)
-
-        self.phase = "STANDBY"
-        self.N = 4.0
 
         self.g0 = 9.81
         self.Isp = missile_params['Isp']
@@ -62,7 +60,8 @@ class Missile:
             np.sin(elevation_init)
         ])
 
-        self.last_a_lat_cmd = np.zeros(3, dtype=float)
+        self.phase = "BOOST"
+        self.a_lat_cmd = np.zeros(3, dtype=float)
 
     def position(self):
         return self.state[MissileState.X:MissileState.Z+1]
@@ -76,22 +75,24 @@ class Missile:
     def mass(self):
         return self.state[MissileState.M]
 
-    def current_phase(self):
-        if self.speed() < 1.0e-6:
-            return "STANDBY"
-        elif self.mass() > self.m_dry:
-            return "BOOST"
+    def update_phase(self):
+        if self.mass() > self.m_dry:
+            self.phase = "BOOST"
         else:
-            return "COAST"
+            self.phase = "COAST"
 
-    def lateral_g(self):
-        return np.linalg.norm(self.last_a_lat_cmd) / self.g0
+    def current_phase(self):
+        return self.phase
 
     def drag(self, v_mag, h):
+        h = max(h, 0.0) # Altitude, clamped to zero
         rho = self.rho0 * np.exp(-h / self.H_scale)
         return 0.5 * rho * self.Cd * self.Aref * v_mag**2
 
-    def pure_pronav_cmd(self, missile_pos, missile_vel, target_pos, target_vel, N=4.0):
+    def lateral_accel_cmd(self):
+        return self.a_lat_cmd
+
+    def pure_pn_cmd(self, missile_pos, missile_vel, target_pos, target_vel, N=4.0):
         """ Calculates the lateral acceleration command using Pure Proportional Navigation (PPN)."""
 
         rel_pos = target_pos - missile_pos
@@ -109,7 +110,7 @@ class Missile:
 
         # TODO: Add a feedforward term to counter-act gravity with additional lateral acceleration?
 
-        return a_lat
+        return self.limit_lateral_accel(a_lat)
 
     def limit_lateral_accel(self, a_lat):
         """Limits the lateral acceleration to the missile's structural G-limits."""
@@ -119,7 +120,17 @@ class Missile:
             a_lat = a_lat * (self.max_lat_accel / lat_accel_mag)
         return a_lat
 
-    def dynamics(self,  missile_state, target_pos, target_vel):
+    def update_guidance(self, target):
+        """Updates the missile's lateral acceleration command based on the current target state."""
+        a_lat_cmd = self.pure_pn_cmd(self.position(),
+                                     self.velocity(),
+                                     target.position(),
+                                     target.velocity())
+        self.a_lat_cmd = a_lat_cmd
+
+        self.update_phase()
+
+    def dynamics(self, missile_state):
         """Missile dynamics with aerodynamic drag, thrust, gravity, and pure PN guidance."""
 
         p = missile_state[MissileState.X:MissileState.Z+1]
@@ -129,11 +140,6 @@ class Missile:
         v_mag = np.linalg.norm(v)
         thrust = self.T if m > self.m_dry else 0.0
 
-        # Drag model
-        h = max(p[MissileState.Z], 0.0) # Altitude, clamped to zero
-        rho = self.rho0 * np.exp(-h / self.H_scale)
-        Fd = 0.5 * rho * self.Cd * self.Aref * v_mag * v
-
         # Thrust force along missile's velocity vector
         if v_mag < 1.0e-6:
             v_dir = self.v_dir_init
@@ -141,23 +147,25 @@ class Missile:
             v_dir = v / v_mag
         Ft = thrust * v_dir
 
-        # Lateral steering from pure PN guidance law
-        a_lat = self.pure_pronav_cmd(p, v, target_pos, target_vel, self.N)
-        a_lat = self.limit_lateral_accel(a_lat)
-        self.last_a_lat_cmd = a_lat
+         # Drag model
+        h = max(p[2], 0.0) # Altitude, clamped to zero
+        rho = self.rho0 * np.exp(-h / self.H_scale)
+        Fd = 0.5 * rho * self.Cd * self.Aref * v_mag * v
 
         # Constant gravity in inertial frame
-        a_grav = np.array([0.0, 0.0, -self.g0])
+        a_grav = np.array([0.0, 0.0, -self.g0], dtype=float)
 
         # State derivatives
         dpdt = v
-        dvdt = Ft / m - Fd / m + a_lat + a_grav
+        dvdt = Ft / m - Fd / m + a_grav + self.a_lat_cmd
         dmdt = -thrust / (self.Isp * self.g0)
 
         return np.hstack((dpdt, dvdt, dmdt))
 
 class Target:
     """Represents a hostile target with its state and simple 3D evasive maneuvering."""
+
+    NUM_STATES = len(TargetState)
 
     def __init__(self, initial_state):
         self.state = np.array([
@@ -190,25 +198,25 @@ class Target:
 def update_sim_states(missile: Missile, target: Target, dt: float):
     """Update missile and target jointly with one RK4 step."""
 
+    # Combine missile and target states into a single vector for joint integration
     joint_state = np.hstack((missile.state, target.state))
-    next_state = rk4_update(combined_dynamics, joint_state, dt, missile, target)
 
-    # TODO: Remove magic numbers by having missile and target classes provide state size and indexing information
-    missile.state = next_state[:7]
-    target.state = next_state[7:]
-    # missile.phase = "BOOST" if missile.mass() > missile.m_dry else "COAST"
+    # Propagate the combined state forward by one time step using RK4 integration
+    updated_state = rk4_update(combined_dynamics, joint_state, dt, missile, target)
+
+    # Update missile and target states from the updated combined state vector
+    missile.state = updated_state[:missile.NUM_STATES]
+    target.state = updated_state[missile.NUM_STATES:missile.NUM_STATES + target.NUM_STATES]
 
 def combined_dynamics(state: np.ndarray, missile: Missile, target: Target) -> np.ndarray:
     """Combines the missile and target dynamics into a single state derivative vector."""
 
-    # TODO: Remove magic numbers by having missile and target classes provide state size and indexing information
-    missile_state = state[:7]
-    target_state = state[7:]
+    # Split the combined state vector back into missile and target states
+    missile_state = state[:missile.NUM_STATES]
+    target_state = state[missile.NUM_STATES:missile.NUM_STATES + target.NUM_STATES]
 
-    target_pos = target_state[TargetState.X:TargetState.Z+1]
-    target_vel = target_state[TargetState.VX:TargetState.VZ+1]
-
-    missile_dynamics = missile.dynamics(missile_state, target_pos, target_vel)
+    # Compute the derivatives for both missile and target
+    missile_dynamics = missile.dynamics(missile_state)
     target_dynamics = target.dynamics(target_state)
 
     return np.hstack((missile_dynamics, target_dynamics))
@@ -238,7 +246,7 @@ def run_simulation():
     missile_params = {
         'T': 150.0e3, # Newtons
         # 'T': 70.0e3, # Newtons
-        'Isp': 240.0, # seconds
+        'Isp': 260.0, # seconds
         'Cd': 0.3,
         'Aref': 0.132,
         'max_lat_accel': 35.0 * 9.81,
@@ -300,7 +308,7 @@ def run_simulation():
         "velocity": [],
         "mass": [],
         "phase": [],
-        "lateral_g": [],
+        "a_lat_cmd": [],
         "drag": []
     }
 
@@ -312,32 +320,42 @@ def run_simulation():
 
     print("Simulating missile interception...")
 
+    # Guidance and simulation loop
     while t < t_max:
-        print(f"Time: {t:.2f} s, Missile Mass: {missile.mass():.1f} kg, Speed: {missile.speed():.1f} m/s, Distance to Target: {np.linalg.norm(target.position() - missile.position()):.1f} m, Phase: {missile.current_phase()}, Lateral G: {missile.lateral_g():.1f} G")
+        # Computing lateral acceleration command at start of each guidance cycle based on current missile and target states
+        missile.update_guidance(target)
+
+        assert abs(np.dot(missile.lateral_accel_cmd(), missile.velocity())) < 1.0e-6, "Lateral acceleration command is not perpendicular to velocity vector!"
+
+        print(f"Time: {t:.2f} s, "
+              f"Missile Mass: {missile.mass():.1f} kg, "
+              f"Speed: {missile.speed():.1f} m/s, "
+              f"Distance to Target: {np.linalg.norm(target.position() - missile.position()):.1f} m, "
+              f"Phase: {missile.current_phase()}, "
+              f"Lateral G: {np.linalg.norm(missile.lateral_accel_cmd()) / missile.g0:.1f} G")
 
         missile_history["time"].append(t)
         missile_history["position"].append(missile.position().copy())
         missile_history["velocity"].append(missile.velocity().copy())
         missile_history["mass"].append(missile.mass())
         missile_history["phase"].append(missile.current_phase())
-        missile_history["lateral_g"].append(missile.lateral_g())
-        missile_history["drag"].append(missile.drag(missile.speed(), missile.position()[MissileState.Z]))
+        missile_history["a_lat_cmd"].append(missile.lateral_accel_cmd().copy())
+        missile_history["drag"].append(missile.drag(missile.speed(), missile.position()[2]))
 
         target_history["time"].append(t)
         target_history["position"].append(target.position().copy())
         target_history["velocity"].append(target.velocity().copy())
 
-        rel_pos = target.position() - missile.position()
-        rel_range = np.linalg.norm(rel_pos)
+        rel_range = np.linalg.norm(target.position() - missile.position())
         if rel_range < missile.kill_radius:
-            print(f"Proximity detonation! Target destroyed at {t:.2f} s. Distance: {rel_range:.1f} m")
+            print(f"Proximity detonation. Target destroyed at {t:.2f} s. Distance: {rel_range:.1f} m")
             intercepted = True
             break
-        if target.position()[TargetState.Z] < 0.0:
+        if target.position()[2] < 0.0:
             print(f"Target impacted the ground at {t:.2f} s. Distance to missile: {rel_range:.1f} m")
-            intercepted = True
+            intercepted = False
             break
-        if missile.position()[MissileState.Z] < 0.0:
+        if missile.position()[2] < 0.0:
             print(f"Missile impacted the ground at {t:.2f} s. Distance to target: {rel_range:.1f} m")
             intercepted = False
             break
@@ -361,7 +379,7 @@ def run_simulation():
     missile_history["position"] = np.array(missile_history["position"])
     missile_history["velocity"] = np.array(missile_history["velocity"])
     missile_history["mass"] = np.array(missile_history["mass"])
-    missile_history["lateral_g"] = np.array(missile_history["lateral_g"])
+    missile_history["a_lat_cmd"] = np.array(missile_history["a_lat_cmd"])
     missile_history["drag"] = np.array(missile_history["drag"])
 
     target_history["time"] = np.array(target_history["time"])
@@ -397,8 +415,9 @@ def plot_metrics(missile_hist, target_hist):
 
     # Missile lateral g-load vs. time
     structural_g_limit = 35.0
+    g = 9.81
     ax = fig.add_subplot(gs[1, 0:2])
-    ax.plot(missile_hist["time"], missile_hist["lateral_g"], label='Missile lateral G-load (G)')
+    ax.plot(missile_hist["time"], np.linalg.norm(missile_hist["a_lat_cmd"], axis=1) / g, label='Missile lateral G-load (G)')
     ax.axhline(y=structural_g_limit, color='red', linestyle='--', label=f'Missile structural limit ({structural_g_limit} G)')
     ax.set_xlabel('Time (s)')
     ax.set_ylabel('Lateral G-Load (G)')
@@ -428,7 +447,7 @@ def plot_metrics(missile_hist, target_hist):
     # # Save the figure as a PNG file
     # fig.savefig('media/missile_interception_metrics.png', dpi=300)
 
-def animate_trajectories(missile_hist, target_hist, intercepted):
+def animate_trajectories(missile_hist, target_hist):
     """Animates the missile and target trajectories and overlays interception telemetry info."""
 
     fig = plt.figure(figsize=(12, 8))
@@ -457,24 +476,24 @@ def animate_trajectories(missile_hist, target_hist, intercepted):
     ax.set_title('Surface-To-Air Interception', weight='bold')
 
     # Initialize drawing objects
-    target_line, = ax.plot([], [], [], color='red', linewidth=1.5, label='Hostile Target')
-    target_vel_line, = ax.plot([], [], [], color='black', linewidth=2.0)
-    target_pt = ax.plot([], [], [], marker='o', color='red', markersize=6)[0]
+    target_line, = ax.plot([], [], [], color='red', label='Target')
+    target_vel_line, = ax.plot([], [], [], color='black')
+    target_pt = ax.plot([], [], [], marker='o', color='red')[0]
 
-    missile_line, = ax.plot([], [], [], color='blue', linewidth=1.5, label='Interceptor Missile')
-    missile_vel_line, = ax.plot([], [], [], color='black', linewidth=2.0)
-    missile_pt = ax.plot([], [], [], marker='o', color='blue', markersize=6)[0]
+    missile_line, = ax.plot([], [], [], color='blue', label='Interceptor Missile')
+    missile_vel_line, = ax.plot([], [], [], color='black')
+    missile_pt = ax.plot([], [], [], marker='o', color='blue')[0]
+    a_lat_cmd_line = ax.plot([], [], [], color='magenta', label='PN Lateral Accel')[0]
 
-    los_line = ax.plot([], [], [], color='black', linestyle='--', linewidth=1.0, alpha=0.7)[0]
+    los_line = ax.plot([], [], [], color='black', linestyle='--')[0]
 
     # Interception telemetry text box
     telemetry_text = fig.text(
         0.02, 0.88, "",
         fontsize=11,
-        color='black',
         fontfamily='monospace',
         verticalalignment='top',
-        bbox=dict(facecolor='white', alpha=0.8, edgecolor='black')
+        bbox=dict(facecolor='white')
     )
 
     ax.legend(loc="upper right")
@@ -516,28 +535,34 @@ def animate_trajectories(missile_hist, target_hist, intercepted):
         missile_vel_line.set_data([missile_pos[0], missile_pos[0] + missile_vel[0]*v_scale], [missile_pos[1], missile_pos[1] + missile_vel[1]*v_scale])
         missile_vel_line.set_3d_properties([missile_pos[2], missile_pos[2] + missile_vel[2]*v_scale])
 
+        # Update pure PN lateral acceleration vector (scaled for visibility)
+        a_lat_cmd = missile_hist["a_lat_cmd"][frame_idx]
+        a_scale = 50.0
+        a_lat_cmd_line.set_data([missile_pos[0], missile_pos[0] + a_lat_cmd[0]*a_scale], [missile_pos[1], missile_pos[1] + a_lat_cmd[1]*a_scale])
+        a_lat_cmd_line.set_3d_properties([missile_pos[2], missile_pos[2] + a_lat_cmd[2]*a_scale])
+
         # Update interception telemetry
         time = missile_hist["time"][frame_idx]
         phase = missile_hist["phase"][frame_idx]
-        speed = np.linalg.norm(missile_vel)
+        speed = np.linalg.norm(missile_hist["velocity"][frame_idx])
         mass = missile_hist["mass"][frame_idx]
-        dist = np.linalg.norm(target_pos - missile_pos)
-        lateral_g = missile_hist["lateral_g"][frame_idx]
-
+        dist = np.linalg.norm(target_hist["position"][frame_idx] - missile_hist["position"][frame_idx])
+        g = 9.81
+        lateral_g = np.linalg.norm(missile_hist["a_lat_cmd"][frame_idx]) / g
         speed_of_sound = 343.0 # m/s at sea level
         speed_mach = speed / speed_of_sound
 
         interception_info = (r"$\bf{Interceptor\ Missile\ Telemetry}$" "\n"
-                             f"Time:      {time:04.1f} s\n"
+                             f"Time:      {time:.1f} s\n"
                              f"Phase:     {phase}\n"
                              f"Speed:     Mach {speed_mach:.1f} ({speed:.0f} m/s)\n"
-                             f"Mass:      {mass:06.1f} kg\n"
-                             f"Dist:      {dist/1000:04.1f} km\n"
-                             f"Lateral G: {lateral_g:05.1f} G")
+                             f"Mass:      {mass:.1f} kg\n"
+                             f"Dist:      {dist:.1f} m\n"
+                             f"Lateral G: {lateral_g:.1f} G")
 
         telemetry_text.set_text(interception_info)
 
-        return target_line, missile_line, target_pt, missile_pt, los_line, target_vel_line, missile_vel_line, telemetry_text
+        return target_line, missile_line, target_pt, missile_pt, los_line, target_vel_line, missile_vel_line, a_lat_cmd_line, telemetry_text
 
     anim = animation.FuncAnimation(fig, update, frames=frames, interval=10, blit=False, repeat=False)
     # # Save animation as a GIF file
@@ -548,4 +573,4 @@ def animate_trajectories(missile_hist, target_hist, intercepted):
 if __name__ == "__main__":
     missile_hist, target_hist, intercepted = run_simulation()
     plot_metrics(missile_hist, target_hist)
-    animate_trajectories(missile_hist, target_hist, intercepted)
+    animate_trajectories(missile_hist, target_hist)
