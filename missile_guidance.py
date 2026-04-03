@@ -84,10 +84,13 @@ class Missile:
     def current_phase(self):
         return self.phase
 
-    def drag(self, v_mag, h):
-        h = max(h, 0.0) # Altitude, clamped to zero
-        rho = self.rho0 * np.exp(-h / self.H_scale)
-        return 0.5 * rho * self.Cd * self.Aref * v_mag**2
+    def thrust(self, mass):
+        return self.T if mass > self.m_dry else 0.0
+
+    def drag(self, speed, height):
+        height = max(height, 0.0) # Altitude, clamped to zero
+        rho = self.rho0 * np.exp(-height / self.H_scale)
+        return 0.5 * rho * self.Cd * self.Aref * speed**2
 
     def lateral_accel_cmd(self):
         return self.a_lat_cmd
@@ -138,19 +141,16 @@ class Missile:
         m = missile_state[MissileState.M]
 
         v_mag = np.linalg.norm(v)
-        thrust = self.T if m > self.m_dry else 0.0
-
-        # Thrust force along missile's velocity vector
         if v_mag < 1.0e-6:
             v_dir = self.v_dir_init
         else:
             v_dir = v / v_mag
-        Ft = thrust * v_dir
 
-         # Drag model
-        h = max(p[2], 0.0) # Altitude, clamped to zero
-        rho = self.rho0 * np.exp(-h / self.H_scale)
-        Fd = 0.5 * rho * self.Cd * self.Aref * v_mag * v
+        # Thrust force along missile's velocity vector
+        Ft = self.thrust(m) * v_dir
+
+         # Drag force along missile's velocity vector
+        Fd = self.drag(v_mag, p[2]) * v_dir
 
         # Constant gravity in inertial frame
         a_grav = np.array([0.0, 0.0, -self.g0], dtype=float)
@@ -158,7 +158,7 @@ class Missile:
         # State derivatives
         dpdt = v
         dvdt = Ft / m - Fd / m + a_grav + self.a_lat_cmd
-        dmdt = -thrust / (self.Isp * self.g0)
+        dmdt = -self.thrust(m) / (self.Isp * self.g0)
 
         return np.hstack((dpdt, dvdt, dmdt))
 
@@ -309,6 +309,7 @@ def run_simulation():
         "mass": [],
         "phase": [],
         "a_lat_cmd": [],
+        "thrust": [],
         "drag": []
     }
 
@@ -340,6 +341,7 @@ def run_simulation():
         missile_history["mass"].append(missile.mass())
         missile_history["phase"].append(missile.current_phase())
         missile_history["a_lat_cmd"].append(missile.lateral_accel_cmd().copy())
+        missile_history["thrust"].append(missile.thrust(missile.mass()))
         missile_history["drag"].append(missile.drag(missile.speed(), missile.position()[2]))
 
         target_history["time"].append(t)
@@ -380,8 +382,8 @@ def run_simulation():
     missile_history["velocity"] = np.array(missile_history["velocity"])
     missile_history["mass"] = np.array(missile_history["mass"])
     missile_history["a_lat_cmd"] = np.array(missile_history["a_lat_cmd"])
+    missile_history["thrust"] = np.array(missile_history["thrust"])
     missile_history["drag"] = np.array(missile_history["drag"])
-
     target_history["time"] = np.array(target_history["time"])
     target_history["position"] = np.array(target_history["position"])
     target_history["velocity"] = np.array(target_history["velocity"])
@@ -389,59 +391,62 @@ def run_simulation():
     return missile_history, target_history, intercepted
 
 def plot_metrics(missile_hist, target_hist):
-    fig = plt.figure(figsize=(15, 10), constrained_layout=True)
+    fig, axes = plt.subplots(2, 3, figsize=(16, 8), constrained_layout=True)
     fig.suptitle('Missile Interception Metrics', fontsize=14, weight='bold')
 
-    gs = fig.add_gridspec(3, 4, height_ratios=[1, 1, 1], hspace=0.08, wspace=0.08)
-
     # Relative range vs. time
-    ax = fig.add_subplot(gs[0, 0:2])
+    ax = axes[0, 0]
     range_to_target = np.linalg.norm(target_hist["position"] - missile_hist["position"], axis=1)
-    ax.plot(missile_hist["time"], range_to_target, label='Missile range to target (m)')
+    ax.plot(missile_hist["time"], range_to_target)
     ax.set_xlabel('Time (s)')
     ax.set_ylabel('Range (m)')
-    ax.set_title('Missile Range to Target vs. Time')
+    ax.set_title('Missile Range-to-Target')
     ax.grid()
-    ax.legend()
 
     # Missile speed vs. time
-    ax = fig.add_subplot(gs[0, 2:4])
-    ax.plot(missile_hist["time"], np.linalg.norm(missile_hist["velocity"], axis=1), label='Missile speed (m/s)')
+    ax = axes[0, 1]
+    ax.plot(missile_hist["time"], np.linalg.norm(missile_hist["velocity"], axis=1))
     ax.set_xlabel('Time (s)')
     ax.set_ylabel('Speed (m/s)')
-    ax.set_title('Missile Speed vs. Time')
+    ax.set_title('Missile Speed')
     ax.grid()
-    ax.legend()
 
     # Missile lateral g-load vs. time
     structural_g_limit = 35.0
     g = 9.81
-    ax = fig.add_subplot(gs[1, 0:2])
-    ax.plot(missile_hist["time"], np.linalg.norm(missile_hist["a_lat_cmd"], axis=1) / g, label='Missile lateral G-load (G)')
+    ax = axes[0, 2]
+    ax.plot(missile_hist["time"], np.linalg.norm(missile_hist["a_lat_cmd"], axis=1) / g)
     ax.axhline(y=structural_g_limit, color='red', linestyle='--', label=f'Missile structural limit ({structural_g_limit} G)')
     ax.set_xlabel('Time (s)')
     ax.set_ylabel('Lateral G-Load (G)')
-    ax.set_title('Missile Lateral G-Load vs. Time')
+    ax.set_title('Missile Lateral G-Load')
     ax.grid()
     ax.legend()
+
+    # Missile thrust vs. time
+    ax = axes[1, 0]
+    ax.plot(missile_hist["time"], missile_hist["thrust"])
+    ax.set_xlabel('Time (s)')
+    ax.set_ylabel('Thrust (N)')
+    ax.set_title('Missile Thrust')
+    ax.grid()
 
     # Missile mass vs. time
-    ax = fig.add_subplot(gs[1, 2:4])
-    ax.plot(missile_hist["time"], missile_hist["mass"], label='Missile mass (kg)')
+    ax = axes[1, 1]
+    ax.plot(missile_hist["time"], missile_hist["mass"])
     ax.set_xlabel('Time (s)')
     ax.set_ylabel('Mass (kg)')
-    ax.set_title('Missile Mass vs. Time')
+    ax.set_title('Missile Mass')
     ax.grid()
-    ax.legend()
 
-    # Missile drag vs. time (centered using middle 2 of 4 columns)
-    ax = fig.add_subplot(gs[2, 1:3])
-    ax.plot(missile_hist["time"], missile_hist["drag"], label='Missile drag force (N)')
+    # Missile drag vs. time
+    ax = axes[1, 2]
+    ax.plot(missile_hist["time"], missile_hist["drag"])
     ax.set_xlabel('Time (s)')
     ax.set_ylabel('Drag Force (N)')
-    ax.set_title('Missile Drag Force vs. Time')
+    ax.set_title('Missile Drag Force')
     ax.grid()
-    ax.legend(loc='upper right')
+
 
     plt.show()
     # # Save the figure as a PNG file
