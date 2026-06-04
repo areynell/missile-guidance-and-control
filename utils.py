@@ -39,6 +39,7 @@ def quaternion_to_rotation_matrix(q):
 
 def quaternion_to_rpy_deg(q):
     """Converts a quaternion into roll, pitch, and yaw angles (in degrees)."""
+
     qw, qx, qy, qz = q
 
     roll = np.arctan2(2.0*(qw*qx + qy*qz), 1.0 - 2.0*(qx**2 + qy**2))
@@ -69,3 +70,20 @@ def vector_to_skew_symmetric_matrix(v):
         [v[2],  0.0, -v[0]],
         [-v[1], v[0], 0.0]
     ], dtype=float)
+
+def wind_to_body_rotation_matrix(alpha, beta):
+    """Creates a rotation matrix that transforms vectors from the wind frame to the body frame based on angle of attack (alpha) and sideslip angle (beta)."""
+
+    # Angle of attack rotation matrix (about the y-axis)
+    Ry_alpha = np.array([[np.cos(alpha), 0.0, -np.sin(alpha)],
+                         [0.0,           1.0,  0.0           ],
+                         [np.sin(alpha), 0.0,  np.cos(alpha) ]], dtype=float)
+
+    # Sideslip angle rotation matrix (about the z-axis)
+    Rz_beta = np.array([[np.cos(beta), -np.sin(beta), 0.0],
+                        [np.sin(beta),  np.cos(beta), 0.0],
+                        [0.0,           0.0,          1.0]], dtype=float)
+
+    # Combined rotation from wind frame to body frame
+    R_bw = Rz_beta @ Ry_alpha  # body <- wind
+    return R_bw
