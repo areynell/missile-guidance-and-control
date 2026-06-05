@@ -17,18 +17,8 @@ class Target:
 
     NUM_STATES = len(TargetState)
 
-    def __init__(self, initial_state):
-        self.state = np.array([
-            initial_state['x'],
-            initial_state['y'],
-            initial_state['z'],
-            initial_state['vx'],
-            initial_state['vy'],
-            initial_state['vz'],
-            initial_state['wx'],
-            initial_state['wy'],
-            initial_state['wz']
-        ], dtype=float)
+    def __init__(self, initial_state: np.ndarray):
+        self.state = initial_state
 
     def position(self):
         return self.state[TargetState.X:TargetState.Z+1]

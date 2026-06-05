@@ -4,14 +4,14 @@ import matplotlib.animation as animation
 
 import utils
 
-def plot_metrics(missile_hist, target_hist):
+def plot_metrics(missile_log, target_log):
     fig, axes = plt.subplots(4, 3, figsize=(16, 8), constrained_layout=True)
     fig.suptitle('Missile Interception Metrics', fontsize=14, weight='bold')
 
     # Relative range vs. time
     ax = axes[0, 0]
-    target_range = np.linalg.norm(target_hist["position"] - missile_hist["position"], axis=1)
-    ax.plot(missile_hist["time"], target_range)
+    target_range = np.linalg.norm(target_log["position"] - missile_log["position"], axis=1)
+    ax.plot(missile_log["time"], target_range)
     ax.set_xlabel('Time (s)')
     ax.set_ylabel('Target Range (m)')
     ax.grid()
@@ -20,8 +20,8 @@ def plot_metrics(missile_hist, target_hist):
     structural_g_limit = 35.0
     g = 9.81
     ax = axes[0, 1]
-    ax.plot(missile_hist["time"], np.linalg.norm(missile_hist["a_lat_desired"], axis=1) / g, label='Desired')
-    ax.plot(missile_hist["time"], np.linalg.norm(missile_hist["a_lat_achieved"], axis=1) / g, label='Achieved')
+    ax.plot(missile_log["time"], np.linalg.norm(missile_log["a_lat_desired"], axis=1) / g, label='Desired')
+    ax.plot(missile_log["time"], np.linalg.norm(missile_log["a_lat_achieved"], axis=1) / g, label='Achieved')
     ax.axhline(y=structural_g_limit, color='red', linestyle='--', label=f'Structural limit ({structural_g_limit} G)')
     ax.set_xlabel('Time (s)')
     ax.set_ylabel('Lateral G-Load (G)')
@@ -30,9 +30,9 @@ def plot_metrics(missile_hist, target_hist):
 
      # Missile aerodynamic forces in wind frame vs. time
     ax = axes[0, 2]
-    ax.plot(missile_hist["time"], missile_hist["Fw_aero"][:, 0], label='Drag (Wind Frame)')
-    ax.plot(missile_hist["time"], missile_hist["Fw_aero"][:, 1], label='Side Force (Wind Frame)')
-    ax.plot(missile_hist["time"], missile_hist["Fw_aero"][:, 2], label='Lift (Wind Frame)')
+    ax.plot(missile_log["time"], missile_log["Fw_aero"][:, 0], label='Drag (Wind Frame)')
+    ax.plot(missile_log["time"], missile_log["Fw_aero"][:, 1], label='Side Force (Wind Frame)')
+    ax.plot(missile_log["time"], missile_log["Fw_aero"][:, 2], label='Lift (Wind Frame)')
     ax.set_xlabel('Time (s)')
     ax.set_ylabel('Aerodynamic Force (N)')
     ax.grid()
@@ -40,16 +40,16 @@ def plot_metrics(missile_hist, target_hist):
 
     # Missile speed vs. time
     ax = axes[1, 0]
-    ax.plot(missile_hist["time"], np.linalg.norm(missile_hist["velocity"], axis=1))
+    ax.plot(missile_log["time"], np.linalg.norm(missile_log["velocity"], axis=1))
     ax.set_xlabel('Time (s)')
     ax.set_ylabel('Speed (m/s)')
     ax.grid()
 
     # Missile body velocity vs. time
     ax = axes[1, 1]
-    ax.plot(missile_hist["time"], missile_hist["velocity"][:, 0], label='vx')
-    ax.plot(missile_hist["time"], missile_hist["velocity"][:, 1], label='vy')
-    ax.plot(missile_hist["time"], missile_hist["velocity"][:, 2], label='vz')
+    ax.plot(missile_log["time"], missile_log["velocity"][:, 0], label='vx')
+    ax.plot(missile_log["time"], missile_log["velocity"][:, 1], label='vy')
+    ax.plot(missile_log["time"], missile_log["velocity"][:, 2], label='vz')
     ax.set_xlabel('Time (s)')
     ax.set_ylabel('Body Velocity (m/s)')
     ax.grid()
@@ -57,16 +57,16 @@ def plot_metrics(missile_hist, target_hist):
 
     # Missile dynamic pressure vs. time
     ax = axes[1, 2]
-    ax.plot(missile_hist["time"], missile_hist["dynamic_pressure"])
+    ax.plot(missile_log["time"], missile_log["dynamic_pressure"])
     ax.set_xlabel('Time (s)')
     ax.set_ylabel('Dynamic Pressure (Pa)')
     ax.grid()
 
     # Missile orientation vs. time
     ax = axes[2, 0]
-    ax.plot(missile_hist["time"], missile_hist["rpy_deg"][:, 0], label='Roll')
-    ax.plot(missile_hist["time"], missile_hist["rpy_deg"][:, 1], label='Pitch')
-    ax.plot(missile_hist["time"], missile_hist["rpy_deg"][:, 2], label='Yaw')
+    ax.plot(missile_log["time"], missile_log["rpy_deg"][:, 0], label='Roll')
+    ax.plot(missile_log["time"], missile_log["rpy_deg"][:, 1], label='Pitch')
+    ax.plot(missile_log["time"], missile_log["rpy_deg"][:, 2], label='Yaw')
     ax.set_xlabel('Time (s)')
     ax.set_ylabel('Orientation (deg)')
     ax.grid()
@@ -74,8 +74,8 @@ def plot_metrics(missile_hist, target_hist):
 
     # Missile alpha and beta vs. time
     ax = axes[2, 1]
-    ax.plot(missile_hist["time"], np.degrees(missile_hist["alpha"]), label='$\\alpha$')
-    ax.plot(missile_hist["time"], np.degrees(missile_hist["beta"]), label='$\\beta$')
+    ax.plot(missile_log["time"], np.degrees(missile_log["alpha"]), label='$\\alpha$')
+    ax.plot(missile_log["time"], np.degrees(missile_log["beta"]), label='$\\beta$')
     ax.set_xlabel('Time (s)')
     ax.set_ylabel('Angle (deg)')
     ax.grid()
@@ -83,9 +83,9 @@ def plot_metrics(missile_hist, target_hist):
 
     # Missile angular velocity vs. time
     ax = axes[2, 2]
-    ax.plot(missile_hist["time"], missile_hist["angular_velocity"][:, 0], label='wx')
-    ax.plot(missile_hist["time"], missile_hist["angular_velocity"][:, 1], label='wy')
-    ax.plot(missile_hist["time"], missile_hist["angular_velocity"][:, 2], label='wz')
+    ax.plot(missile_log["time"], missile_log["angular_velocity"][:, 0], label='wx')
+    ax.plot(missile_log["time"], missile_log["angular_velocity"][:, 1], label='wy')
+    ax.plot(missile_log["time"], missile_log["angular_velocity"][:, 2], label='wz')
     ax.set_xlabel('Time (s)')
     ax.set_ylabel('Angular Velocity (rad/s)')
     ax.grid()
@@ -93,9 +93,9 @@ def plot_metrics(missile_hist, target_hist):
 
     # Missile control surface deflections vs. time
     ax = axes[3, 0]
-    ax.plot(missile_hist["time"], np.degrees(missile_hist["control_deltas"][:, 0]), label='Aileron')
-    ax.plot(missile_hist["time"], np.degrees(missile_hist["control_deltas"][:, 1]), label='Elevator')
-    ax.plot(missile_hist["time"], np.degrees(missile_hist["control_deltas"][:, 2]), label='Rudder')
+    ax.plot(missile_log["time"], np.degrees(missile_log["control_deltas"][:, 0]), label='Aileron')
+    ax.plot(missile_log["time"], np.degrees(missile_log["control_deltas"][:, 1]), label='Elevator')
+    ax.plot(missile_log["time"], np.degrees(missile_log["control_deltas"][:, 2]), label='Rudder')
     ax.set_xlabel('Time (s)')
     ax.set_ylabel('Control Deflection (deg)')
     ax.grid()
@@ -103,14 +103,14 @@ def plot_metrics(missile_hist, target_hist):
 
     # Missile thrust vs. time
     ax = axes[3, 1]
-    ax.plot(missile_hist["time"], np.linalg.norm(missile_hist["thrust"], axis=1))
+    ax.plot(missile_log["time"], np.linalg.norm(missile_log["thrust"], axis=1))
     ax.set_xlabel('Time (s)')
     ax.set_ylabel('Thrust (N)')
     ax.grid()
 
     # Missile mass vs. time
     ax = axes[3, 2]
-    ax.plot(missile_hist["time"], missile_hist["mass"])
+    ax.plot(missile_log["time"], missile_log["mass"])
     ax.set_xlabel('Time (s)')
     ax.set_ylabel('Mass (kg)')
     ax.grid()
@@ -119,14 +119,14 @@ def plot_metrics(missile_hist, target_hist):
     # # Save the figure as a PNG file
     # fig.savefig('media/missile_interception_metrics.png', dpi=300)
 
-def animate_trajectories(missile_hist, target_hist):
+def animate_trajectories(missile_log, target_log):
     """Animates the missile and target trajectories and overlays interception telemetry info."""
 
     fig = plt.figure(figsize=(12, 8))
     ax = fig.add_subplot(111, projection='3d')
 
     # Static axis scaling (creates a 1:1:1 cubic aspect ratio)
-    all_data = np.concatenate((np.array(missile_hist["position"]), np.array(target_hist["position"])), axis=0)
+    all_data = np.concatenate((np.array(missile_log["position"]), np.array(target_log["position"])), axis=0)
     max_range = np.array([
         all_data[:,0].max() - all_data[:,0].min(),
         all_data[:,1].max() - all_data[:,1].min(),
@@ -148,7 +148,7 @@ def animate_trajectories(missile_hist, target_hist):
     ax.set_title('Surface-To-Air Interception', weight='bold')
 
     # Find the index where the flight phase switches to COAST
-    flight_phases = missile_hist["flight_phase"]
+    flight_phases = missile_log["flight_phase"]
     transition_idx = len(flight_phases)
     for i, flight_phase in enumerate(flight_phases):
         if flight_phase == "COAST":
@@ -182,24 +182,24 @@ def animate_trajectories(missile_hist, target_hist):
     ax.legend(loc="upper right")
 
     # Frame downsampling (~250 frames rendered for smooth playback)
-    total_steps = len(target_hist["position"])
+    total_steps = len(target_log["position"])
     frame_skip = max(1, total_steps // 250)
     frames = list(range(0, total_steps, frame_skip))
     if frames[-1] != total_steps - 1:
         frames.append(total_steps - 1)
 
     def update(frame_idx):
-        target_pos = target_hist["position"]
-        target_vel = target_hist["velocity"]
+        target_pos = target_log["position"]
+        target_vel = target_log["velocity"]
 
         target_line.set_data(target_pos[:frame_idx, 0], target_pos[:frame_idx, 1])
         target_line.set_3d_properties(target_pos[:frame_idx, 2])
         target_pt.set_data([target_pos[frame_idx, 0]], [target_pos[frame_idx, 1]])
         target_pt.set_3d_properties([target_pos[frame_idx, 2]])
 
-        missile_pos = missile_hist["position"]
-        missile_vel_body = missile_hist["velocity"]
-        missile_orientation = missile_hist["orientation"]
+        missile_pos = missile_log["position"]
+        missile_vel_body = missile_log["velocity"]
+        missile_orientation = missile_log["orientation"]
 
         if frame_idx <= transition_idx:
             # Draw only the boost line
@@ -225,9 +225,9 @@ def animate_trajectories(missile_hist, target_hist):
         missile_pt.set_3d_properties([missile_pos[frame_idx, 2]])
 
         # Update line of sight (LOS)
-        los_line.set_data([target_hist["position"][frame_idx, 0], missile_pos[frame_idx, 0]],
-                          [target_hist["position"][frame_idx, 1], missile_pos[frame_idx, 1]])
-        los_line.set_3d_properties([target_hist["position"][frame_idx, 2], missile_pos[frame_idx, 2]])
+        los_line.set_data([target_log["position"][frame_idx, 0], missile_pos[frame_idx, 0]],
+                          [target_log["position"][frame_idx, 1], missile_pos[frame_idx, 1]])
+        los_line.set_3d_properties([target_log["position"][frame_idx, 2], missile_pos[frame_idx, 2]])
 
         # Update velocity vectors (scaled for visibility)
         v_scale = 3.0
@@ -243,21 +243,21 @@ def animate_trajectories(missile_hist, target_hist):
 
         # Update lateral acceleration vectors (scaled for visibility)
         a_scale = 50.0
-        a_lat_desired = missile_hist["a_lat_desired"][frame_idx]
+        a_lat_desired = missile_log["a_lat_desired"][frame_idx]
         a_lat_desired_line.set_data([missile_pos[frame_idx, 0], missile_pos[frame_idx, 0] + a_lat_desired[0]*a_scale], [missile_pos[frame_idx, 1], missile_pos[frame_idx, 1] + a_lat_desired[1]*a_scale])
         a_lat_desired_line.set_3d_properties([missile_pos[frame_idx, 2], missile_pos[frame_idx, 2] + a_lat_desired[2]*a_scale])
-        a_lat_achieved = missile_hist["a_lat_achieved"][frame_idx]
+        a_lat_achieved = missile_log["a_lat_achieved"][frame_idx]
         a_lat_achieved_line.set_data([missile_pos[frame_idx, 0], missile_pos[frame_idx, 0] + a_lat_achieved[0]*a_scale], [missile_pos[frame_idx, 1], missile_pos[frame_idx, 1] + a_lat_achieved[1]*a_scale])
         a_lat_achieved_line.set_3d_properties([missile_pos[frame_idx, 2], missile_pos[frame_idx, 2] + a_lat_achieved[2]*a_scale])
 
         # Update interception telemetry
-        time = missile_hist["time"][frame_idx]
-        flight_phase = missile_hist["flight_phase"][frame_idx]
+        time = missile_log["time"][frame_idx]
+        flight_phase = missile_log["flight_phase"][frame_idx]
         speed = np.linalg.norm(missile_vel_body[frame_idx])
-        mass = missile_hist["mass"][frame_idx]
-        dist = np.linalg.norm(target_hist["position"][frame_idx] - missile_hist["position"][frame_idx])
+        mass = missile_log["mass"][frame_idx]
+        dist = np.linalg.norm(target_log["position"][frame_idx] - missile_log["position"][frame_idx])
         g = 9.81
-        lateral_g = np.linalg.norm(missile_hist["a_lat_achieved"][frame_idx]) / g
+        lateral_g = np.linalg.norm(missile_log["a_lat_achieved"][frame_idx]) / g
         speed_of_sound = 343.0 # m/s at sea level
         speed_mach = speed / speed_of_sound
 
@@ -268,8 +268,8 @@ def animate_trajectories(missile_hist, target_hist):
                              f"Mass:         {mass:.1f} kg\n"
                              f"Dist:         {dist:.1f} m\n"
                              f"Lateral G:    {lateral_g:.1f} G\n"
-                             f"Alpha:        {np.degrees(missile_hist['alpha'][frame_idx]):.1f} deg\n"
-                             f"Beta:         {np.degrees(missile_hist['beta'][frame_idx]):.1f} deg\n")
+                             f"Alpha:        {np.degrees(missile_log['alpha'][frame_idx]):.1f} deg\n"
+                             f"Beta:         {np.degrees(missile_log['beta'][frame_idx]):.1f} deg\n")
 
 
         telemetry_text.set_text(interception_info)
@@ -282,14 +282,14 @@ def animate_trajectories(missile_hist, target_hist):
 
     plt.show()
 
-def animate_6dof_missile(missile_hist, target_hist, length, diameter,
+def animate_6dof_missile(missile_log, target_log, length, diameter,
                          vi_wind=np.array([0.0, 0.0, 0.0]),
                          v_scale=0.01, f_scale=0.0005):
     fig = plt.figure(figsize=(10, 8))
     ax = fig.add_subplot(111, projection='3d')
 
     # Frame downsampling (~250 frames rendered for smooth playback)
-    total_steps = len(missile_hist["time"])
+    total_steps = len(missile_log["time"])
     frame_skip = max(1, total_steps // 250)
     frames = list(range(0, total_steps, frame_skip))
     if frames[-1] != total_steps - 1:
@@ -315,11 +315,11 @@ def animate_6dof_missile(missile_hist, target_hist, length, diameter,
     def update(frame_idx):
         ax.clear()
 
-        missile_position = missile_hist["position"][frame_idx]
-        missile_orientation = missile_hist["orientation"][frame_idx]
+        missile_position = missile_log["position"][frame_idx]
+        missile_orientation = missile_log["orientation"][frame_idx]
         R_ib = utils.quaternion_to_rotation_matrix(missile_orientation)  # Body -> inertial
 
-        target_position = target_hist["position"][frame_idx]
+        target_position = target_log["position"][frame_idx]
 
         # Missile geometry
         for missile_points, shape, color in [
@@ -345,7 +345,7 @@ def animate_6dof_missile(missile_hist, target_hist, length, diameter,
                     color=color, linewidth=3, label=label)
 
         # Velocity and wind vectors
-        v_body = missile_hist["velocity"][frame_idx]
+        v_body = missile_log["velocity"][frame_idx]
         v_inertial = R_ib @ v_body
         v_norm = np.linalg.norm(v_inertial)
         if v_norm > 1e-3:
@@ -358,9 +358,9 @@ def animate_6dof_missile(missile_hist, target_hist, length, diameter,
             ax.plot([missile_position[0], w_end[0]], [missile_position[1], w_end[1]], [missile_position[2], w_end[2]],
                     color='magenta', linewidth=2, linestyle=':', label='Wind')
 
-        alpha = missile_hist["alpha"][frame_idx]
-        beta = missile_hist["beta"][frame_idx]
-        Fw_aero = missile_hist["Fw_aero"][frame_idx]
+        alpha = missile_log["alpha"][frame_idx]
+        beta = missile_log["beta"][frame_idx]
+        Fw_aero = missile_log["Fw_aero"][frame_idx]
         R_bw = utils.wind_to_body_rotation_matrix(alpha, beta) # Body <- wind
 
         # Isolate each wind-frame component, rotate to body, then to inertial
@@ -387,7 +387,7 @@ def animate_6dof_missile(missile_hist, target_hist, length, diameter,
         ax.set_zlabel('Inertial Z (m)')
         ax.set_title(
             f'Missile 6-DOF Attitude and Forces\n'
-            f'Time: {missile_hist["time"][frame_idx]:.2f} s  |  '
+            f'Time: {missile_log["time"][frame_idx]:.2f} s  |  '
             f'Speed: {v_norm:.0f} m/s  |  '
             f'Target Range: {target_range:.1f} m  |  '
             f'$\\alpha$: {np.rad2deg(alpha):.1f}°,  $\\beta$: {np.rad2deg(beta):.1f}°'

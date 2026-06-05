@@ -1,4 +1,5 @@
 import numpy as np
+from parameters import ControllerParams
 import utils
 
 class MissileController:
@@ -8,34 +9,34 @@ class MissileController:
     - Pitch: 3-loop acceleration control
     - Yaw: 3-loop acceleration control
     """
-    def __init__(self, roll_gains: dict, pitch_gains: dict, yaw_gains: dict, P_dyn_min: float, P_dyn_ref: float, integral_limit: float, delta_limit: float):
+    def __init__(self, controller_params: ControllerParams):
         # Roll gains (cascaded attitude/rate PI control)
-        self.Kp_roll = roll_gains['Kp_roll'] # Roll angle proportional gain to generate a roll rate command from roll angle error
-        self.Kp_roll_rate = roll_gains['Kp_roll_rate'] # Roll rate proportional gain to generate a roll control surface deflection command from roll rate error
-        self.Ki_roll_rate = roll_gains['Ki_roll_rate'] # Roll rate integral gain to eliminate steady-state error in roll rate tracking
+        self.Kp_roll = controller_params.Kp_roll # Roll angle proportional gain to generate a roll rate command from roll angle error
+        self.Kp_roll_rate = controller_params.Kp_roll_rate # Roll rate proportional gain to generate a roll control surface deflection command from roll rate error
+        self.Ki_roll_rate = controller_params.Ki_roll_rate # Roll rate integral gain to eliminate steady-state error in roll rate tracking
 
         # Pitch gains (3-loop acceleration control)
-        self.Kdc_pitch = pitch_gains['Kdc_pitch'] # DC gain to scale guidance acceleration command into expected acceleration
-        self.Ka_pitch_rate = pitch_gains['Ka_pitch_rate'] # Accleration loop gain to convert acceleration error into a pitch rate command
-        self.Ki_pitch_rate = pitch_gains['Ki_pitch_rate'] # Integral loop gain to eliminate steady-state error in pitch rate tracking
-        self.Kr_pitch_rate = pitch_gains['Kr_pitch_rate'] # Rate loop gain to convert pitch rate error into a pitch control surface deflection command
+        self.Kdc_pitch = controller_params.Kdc_pitch # DC gain to scale guidance acceleration command into expected acceleration
+        self.Ka_pitch_rate = controller_params.Ka_pitch_rate # Accleration loop gain to convert acceleration error into a pitch rate command
+        self.Ki_pitch_rate = controller_params.Ki_pitch_rate # Integral loop gain to eliminate steady-state error in pitch rate tracking
+        self.Kr_pitch_rate = controller_params.Kr_pitch_rate # Rate loop gain to convert pitch rate error into a pitch control surface deflection command
 
         # Yaw gains (3-loop acceleration control)
-        self.Kdc_yaw = yaw_gains['Kdc_yaw'] # DC gain to scale guidance acceleration command into expected acceleration
-        self.Ka_yaw_rate = yaw_gains['Ka_yaw_rate'] # Accleration loop gain to convert acceleration error into a yaw rate command
-        self.Ki_yaw_rate = yaw_gains['Ki_yaw_rate'] # Integral loop gain to eliminate steady-state error in yaw rate tracking
-        self.Kr_yaw_rate = yaw_gains['Kr_yaw_rate'] # Rate loop gain to convert yaw rate error into a yaw control surface deflection command
+        self.Kdc_yaw = controller_params.Kdc_yaw # DC gain to scale guidance acceleration command into expected acceleration
+        self.Ka_yaw_rate = controller_params.Ka_yaw_rate # Accleration loop gain to convert acceleration error into a yaw rate command
+        self.Ki_yaw_rate = controller_params.Ki_yaw_rate # Integral loop gain to eliminate steady-state error in yaw rate tracking
+        self.Kr_yaw_rate = controller_params.Kr_yaw_rate # Rate loop gain to convert yaw rate error into a yaw control surface deflection command
 
         # TODO: Implement better integrator anti-windup strategy than just clamping the integral term
         # Integrator states
         self.int_roll_rate_error = 0.0
         self.int_pitch_rate_error = 0.0
         self.int_yaw_rate_error = 0.0
-        self.integral_limit = integral_limit # Anti-windup clamp limit (rad)
+        self.integral_limit = controller_params.integral_limit # Anti-windup clamp limit (rad)
 
-        self.P_dyn_min = P_dyn_min # Minimum dynamic pressure for gain scheduling to avoid excessive control deflections at very low dynamic pressures (Pa)
-        self.P_dyn_ref = P_dyn_ref # Reference dynamic pressure for gain scheduling (Pa)
-        self.delta_limit = delta_limit # Max control surface deflection (rad)
+        self.P_dyn_min = controller_params.P_dyn_min # Minimum dynamic pressure for gain scheduling to avoid excessive control deflections at very low dynamic pressures (Pa)
+        self.P_dyn_ref = controller_params.P_dyn_ref # Reference dynamic pressure for gain scheduling (Pa)
+        self.delta_limit = controller_params.delta_limit # Max control surface deflection (rad)
 
     def update(self, roll_cmd: float, a_cmd_body: np.ndarray, a_body: np.ndarray, w: np.ndarray, q: np.ndarray, P_dyn: float, dt: float) -> np.ndarray:
         """

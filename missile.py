@@ -1,7 +1,8 @@
 from enum import IntEnum
 import numpy as np
 
-from guidance import Guidance
+from parameters import AtmosphericParams, MissileParams, MissileParams
+from guidance import MissileGuidance
 from controller import MissileController
 import utils
 
@@ -26,58 +27,45 @@ class Missile:
 
     NUM_STATES = len(MissileState)
 
-    def __init__(self, initial_state, missile_params, atmospheric_params):
-        self.state = np.array([
-            initial_state['x'],
-            initial_state['y'],
-            initial_state['z'],
-            initial_state['qw'],
-            initial_state['qx'],
-            initial_state['qy'],
-            initial_state['qz'],
-            initial_state['vx'],
-            initial_state['vy'],
-            initial_state['vz'],
-            initial_state['wx'],
-            initial_state['wy'],
-            initial_state['wz'],
-            initial_state['m'],], dtype=float)
+    def __init__(self, initial_state: np.ndarray, missile_params: MissileParams, atmospheric_params: AtmosphericParams,
+                 missile_guidance: MissileGuidance, missile_controller: MissileController):
+        self.state = initial_state
 
         self.g0 = 9.81
-        self.Isp = missile_params['Isp']
-        self.T = missile_params['T']
+        self.Isp = missile_params.propulsion.Isp
+        self.T = missile_params.propulsion.thrust
 
         # Drag coefficients
-        self.CD_0 = missile_params['CD_0'] # Base drag coefficient at zero angle of attack, based on parasitic/skin friction drag of the missile's body and fins
-        self.CD_alpha = missile_params['CD_alpha'] # Drag static stability derivative (dCD/dAlpha)
-        self.CD_delta = missile_params['CD_delta'] # Drag control derivative (dCD/dDelta)
+        self.CD_0 = missile_params.aero.CD_0 # Base drag coefficient at zero angle of attack, based on parasitic/skin friction drag of the missile's body and fins
+        self.CD_alpha = missile_params.aero.CD_alpha # Drag static stability derivative (dCD/dAlpha)
+        self.CD_delta = missile_params.aero.CD_delta # Drag control derivative (dCD/dDelta)
 
         # Lift coefficients
-        self.CL_0 = missile_params['CL_0'] # Base lift coefficient at zero angle of attack, which is typically 0 for a symmetric missile body
-        self.CL_alpha = missile_params['CL_alpha'] # Lift static stability derivative (dCL/dAlpha)
-        self.CL_delta = missile_params['CL_delta'] # Lift control derivative (dCL/dDelta)
+        self.CL_0 = missile_params.aero.CL_0 # Base lift coefficient at zero angle of attack, which is typically 0 for a symmetric missile body
+        self.CL_alpha = missile_params.aero.CL_alpha # Lift static stability derivative (dCL/dAlpha)
+        self.CL_delta = missile_params.aero.CL_delta # Lift control derivative (dCL/dDelta)
 
         # Side-force coefficients
-        self.CY_0 = missile_params['CY_0'] # Base side-force coefficient at zero sideslip, which is typically 0 for a symmetric missile body
-        self.CY_beta = missile_params['CY_beta'] # Side-force static stability derivative (dCY/dBeta)
-        self.CY_delta = missile_params['CY_delta'] # Side-force control derivative (dCY/dDelta)
+        self.CY_0 = missile_params.aero.CY_0 # Base side-force coefficient at zero sideslip, which is typically 0 for a symmetric missile body
+        self.CY_beta = missile_params.aero.CY_beta # Side-force static stability derivative (dCY/dBeta)
+        self.CY_delta = missile_params.aero.CY_delta # Side-force control derivative (dCY/dDelta)
 
         # Rolling moment coefficients
-        self.Cl_0 = missile_params['Cl_0'] # Base rolling moment coefficient at zero aileron deflection, which is typically 0 for a symmetric missile body
-        self.Cl_p = missile_params['Cl_p'] # Roll damping dynamic stability derivative (dCl/dp)
-        self.Cl_delta = missile_params['Cl_delta'] # Roll control derivative (dCl/dDelta)
+        self.Cl_0 = missile_params.aero.Cl_0 # Base rolling moment coefficient at zero aileron deflection, which is typically 0 for a symmetric missile body
+        self.Cl_p = missile_params.aero.Cl_p # Roll damping dynamic stability derivative (dCl/dp)
+        self.Cl_delta = missile_params.aero.Cl_delta # Roll control derivative (dCl/dDelta)
 
         # Pitching moment coefficients
-        self.Cm_0 = missile_params['Cm_0'] # Base pitching moment coefficient at zero angle of attack, which is typically 0 for a symmetric missile body
-        self.Cm_alpha = missile_params['Cm_alpha'] # Pitch static stability derivative (dCm/dAlpha)
-        self.Cm_q = missile_params['Cm_q'] # Pitch damping dynamic stability derivative (dCm/dq)
-        self.Cm_delta = missile_params['Cm_delta'] # Pitch control derivative (dCm/dDelta)
+        self.Cm_0 = missile_params.aero.Cm_0 # Base pitching moment coefficient at zero angle of attack, which is typically 0 for a symmetric missile body
+        self.Cm_alpha = missile_params.aero.Cm_alpha # Pitch static stability derivative (dCm/dAlpha)
+        self.Cm_q = missile_params.aero.Cm_q # Pitch damping dynamic stability derivative (dCm/dq)
+        self.Cm_delta = missile_params.aero.Cm_delta # Pitch control derivative (dCm/dDelta)
 
         # Yawing moment coefficients
-        self.Cn_0 = missile_params['Cn_0'] # Base yawing moment coefficient at zero sideslip, which is typically 0 for a symmetric missile body
-        self.Cn_beta = missile_params['Cn_beta'] # Yaw static stability derivative (dCn/dBeta)
-        self.Cn_r = missile_params['Cn_r'] # Yaw damping dynamic stability derivative (dCn/dr)
-        self.Cn_delta = missile_params['Cn_delta'] # Yaw control derivative (dCn/dDelta)
+        self.Cn_0 = missile_params.aero.Cn_0 # Base yawing moment coefficient at zero sideslip, which is typically 0 for a symmetric missile body
+        self.Cn_beta = missile_params.aero.Cn_beta # Yaw static stability derivative (dCn/dBeta)
+        self.Cn_r = missile_params.aero.Cn_r # Yaw damping dynamic stability derivative (dCn/dr)
+        self.Cn_delta = missile_params.aero.Cn_delta # Yaw control derivative (dCn/dDelta)
 
         print("Missile Aerodynamic Force Coefficients: CD_0 = {:.3f}, CD_alpha = {:.3f}, CL_0 = {:.3f}, CL_alpha = {:.3f}, CL_delta = {:.3f}, CY_0 = {:.3f}, CY_beta = {:.3f}, CY_delta = {:.3f}".format(
             self.CD_0, self.CD_alpha, self.CL_0, self.CL_alpha, self.CL_delta, self.CY_0, self.CY_beta, self.CY_delta
@@ -87,16 +75,16 @@ class Missile:
             self.Cl_0, self.Cl_p, self.Cl_delta, self.Cm_0, self.Cm_alpha, self.Cm_q, self.Cm_delta, self.Cn_0, self.Cn_beta, self.Cn_r, self.Cn_delta
         ))
 
-        self.D_ref = missile_params['D_ref']
+        self.D_ref = missile_params.structural.diameter
         self.A_ref = np.pi * (self.D_ref / 2.0)**2 # Reference area for aerodynamic force calculations, typically the maximum cross-sectional area of the missile
-        self.L = missile_params['L']
-        self.max_lat_accel = missile_params['max_lat_accel']
-        self.m_dry = missile_params['m_dry']
-        self.kill_radius = missile_params['kill_radius']
+        self.L = missile_params.structural.length
+        self.max_lat_accel = missile_params.structural.max_lateral_accel
+        self.m_dry = missile_params.structural.dry_mass
+        self.kill_radius = missile_params.warhead.kill_radius
 
-        self.rho0 = atmospheric_params['rho0']
-        self.H_scale = atmospheric_params['H_scale']
-        self.vi_wind = atmospheric_params['vi_wind']
+        self.rho0 = atmospheric_params.sea_level_density
+        self.H_scale = atmospheric_params.scale_height
+        self.vi_wind = atmospheric_params.wind_vector
 
         self.flight_phase = "BOOST"
         self.a_lat_desired = np.zeros(3, dtype=float)
@@ -104,33 +92,8 @@ class Missile:
         # Safe minimum velocity threshold for aerodynamic effectiveness
         self.v_min_aero = 1.0
 
-        # Missile guidance law with specified maximum lateral acceleration and navigation constant (N) for pure proportional navigation
-        self.guidance = Guidance(self.max_lat_accel, N=4.0)
-
-        # Missile flight controller with appropriate gains for roll, pitch, and yaw control
-        roll_gains = {
-            'Kp_roll': 0.5,
-            'Kp_roll_rate': 0.02,
-            'Ki_roll_rate': 0.01
-        }
-        pitch_gains = {
-            'Kdc_pitch': 1.0,
-            'Ka_pitch_rate': 0.1,
-            'Ki_pitch_rate': 0.25,
-            'Kr_pitch_rate': 0.25
-        }
-        yaw_gains = {
-            'Kdc_yaw': 1.0,
-            'Ka_yaw_rate': 0.1,
-            'Ki_yaw_rate': 0.25,
-            'Kr_yaw_rate': 0.25
-        }
-        v_ref = 500.00 # Reference speed for gain scheduling
-        P_dyn_ref = 0.5 * self.rho0 * v_ref**2 # Reference dynamic pressure for gain scheduling
-        P_dyn_min = 100.0 # Minimum dynamic pressure for gain scheduling to avoid excessive control deflections at very low dynamic pressures
-        integral_limit = 2.0 # Anti-windup limit for integral terms in the controller (rad)
-        delta_limit = np.deg2rad(45.0) # Maximum control surface deflection (rad)
-        self.controller = MissileController(roll_gains, pitch_gains, yaw_gains, P_dyn_min, P_dyn_ref, integral_limit, delta_limit)
+        self.guidance = missile_guidance
+        self.controller = missile_controller
         self.control_deltas = np.zeros(3, dtype=float) # [delta_a, delta_e, delta_r]
 
     def position(self):
@@ -305,7 +268,7 @@ class Missile:
 
         # TODO: Does PN guidance need to take inertial wind velocity into account?
 
-        self.a_lat_desired = self.guidance.pure_pn_guidance(self.position(), vi, target.position(), target.velocity())
+        self.a_lat_desired = self.guidance.compute_guidance(self.position(), vi, target.position(), target.velocity())
         self.update_flight_phase()
 
     def update_control(self, dt):

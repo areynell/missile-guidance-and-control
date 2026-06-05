@@ -1,18 +1,23 @@
 # Missile Guidance and Control
-Implements and simulates 6-DoF Newton-Euler equations of motion for a missile running a proportional navigation (PN) guidance law and a flight controller, for surface-to-air interception scenarios.
+Implements and simulates 6-DoF Newton-Euler equations of motion for a missile running a proportional navigation (PN) guidance law and a 3-loop cascaded flight controller, for surface-to-air interception scenarios.
 
-![missile interception animation](media/missile_interception_animation.gif)
+<p align="center">
+  <img src="media/missile_interception_animation.gif" alt="Missile Interception Animation" width="70%">
+</p>
 
-![missile interception metrics](media/missile_interception_metrics.png)
+<p align="center">
+  <img src="media/missile_interception_metrics.png" alt="Missile Interception Metrics" width="100%">
+</p>
 
-![missile interception orientation and forces](media/missile_orientation_and_forces_animation.gif)
+<p align="center">
+  <img src="media/missile_orientation_and_forces_animation.gif" alt="Missile Interception Orientation and Forces" width="70%">
+</p>
 
 ## TODO
 1) Add cross-coupling between forces and moments along multiple axes
 2) Add variable inertia rate due to mass flow in dwbdt equations
 3) Add changing moment arm to pitch due to changing CG from mass flow
 4) Make force and moment coefficients functions of Mach instead of constants
-5) Perform more rigorous controller design
-6) Re-order functions in code to make logic flow easier to understand
-7) Make data logging neater in simulation loop
-8) Refactor code into appropriate files and classes
+5) Perform rigorous controller design
+6) Make data logging neater in simulation loop
+7) Add feedforward guidance commands to flight controller
