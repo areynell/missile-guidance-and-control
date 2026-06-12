@@ -158,7 +158,7 @@ def main():
     print("Generating trajectory animation...")
     animate_trajectories(missile_log, target_log)
 
-    print("Generating 6-DOF attitude and force animation...")
+    print("Generating orientation and force animation...")
     animate_6dof_missile(missile_log, target_log, length=missile.L, diameter=missile.D_ref)
 
 if __name__ == "__main__":
