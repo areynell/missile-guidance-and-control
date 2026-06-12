@@ -38,7 +38,7 @@ class MissileController:
         self.P_dyn_ref = controller_params.P_dyn_ref # Reference dynamic pressure for gain scheduling (Pa)
         self.delta_limit = controller_params.delta_limit # Max control surface deflection (rad)
 
-    def update(self, roll_cmd: float, a_cmd_body: np.ndarray, a_body: np.ndarray, w: np.ndarray, q: np.ndarray, P_dyn: float, dt: float) -> np.ndarray:
+    def update(self, roll_cmd: float, a_cmd_body: np.ndarray, a_body: np.ndarray, w: np.ndarray, q: np.ndarray, P_dyn: float, mass: float, A_ref: float, CN_delta: float, CN_alpha: float, Cm_delta: float, Cm_alpha: float, CY_delta: float, CY_beta: float, Cn_delta: float, Cn_beta: float, dt: float) -> np.ndarray:
         """
         Computes the virtual control effector commands (aileron, elevator, rudder).
 
@@ -65,21 +65,110 @@ class MissileController:
 
         roll = utils.quaternion_to_roll(q)
 
-        # Compute control deflections for each axis
-        delta_roll = self.roll_feedback_control(roll_cmd, roll, wx, dt)
-        delta_pitch = self.pitch_feedback_control(az_cmd, az, wy, dt)
-        delta_yaw = self.yaw_feedback_control(ay_cmd, ay, wz, dt)
+        # Computing feedforward control deflections for pitch and yaw axes
+        delta_pitch_ff = self.pitch_feedforward_control(az_cmd, mass, P_dyn, A_ref, CN_delta, CN_alpha, Cm_delta, Cm_alpha)
+        delta_yaw_ff = self.yaw_feedforward_control(ay_cmd, mass, P_dyn, A_ref, CY_delta, CY_beta, Cn_delta, Cn_beta)
 
-        control_deltas = np.array([delta_roll, delta_pitch, delta_yaw])
+        # Computing feedback control deflections for each axis
+        delta_roll_fb = self.roll_feedback_control(roll_cmd, roll, wx, dt)
+        delta_pitch_fb = self.pitch_feedback_control(az_cmd, az, wy, dt)
+        delta_yaw_fb = self.yaw_feedback_control(ay_cmd, ay, wz, dt)
 
-        # Scale deflections inversely with dynamic pressure: More deflection needed at low speed, less deflection needed at high speed, for the same aerodynamic effect
-        P_dyn_eff = max(P_dyn, self.P_dyn_min) # Avoid division by zero or very small dynamic pressures for gain scheduling
-        P_dyn_ratio = self.P_dyn_ref / P_dyn_eff
-        control_deltas = P_dyn_ratio * control_deltas # Scale control deflections inversely with dynamic pressure for gain scheduling
+        # NOTE: No feedforward for roll since it doesn't have a direct feedforward term from the guidance law like pitch and yaw do
+        control_deltas_ff = np.array([0.0, delta_pitch_ff, delta_yaw_ff])
+        control_deltas_fb = np.array([delta_roll_fb, delta_pitch_fb, delta_yaw_fb])
 
+        # Computing gain scaling/scheduling based on dynamic pressure
+        P_dyn_eff = max(P_dyn, self.P_dyn_min)
+        gain_scaling = self.P_dyn_ref / P_dyn_eff
+
+        # Combine feedforward and feedback control
+        control_deltas = control_deltas_ff + (gain_scaling * control_deltas_fb)
+
+        # Limit control surface deflections to physical saturation limits
         control_deltas = np.clip(control_deltas, -self.delta_limit, self.delta_limit)
 
         return control_deltas
+
+    def pitch_feedforward_control(self, az_cmd: float, mass: float, P_dyn: float, A_ref: float, CN_delta: float, CN_alpha: float, Cm_delta: float, Cm_alpha: float) -> float:
+        """
+        Computes a feedforward pitch control deflection based on the desired acceleration command in the body z-axis from the guidance law.
+        The pitch feedforward term is derived by solving the steady-state aerodynamic equations (Cm = 0, wy = 0) for the deflection required
+        to produce a lateral acceleration along the body z-axis.
+
+        1) Assume pitch moment is zero (Cm = 0, wy = 0)
+        Cm = (Cm_alpha * alpha) + (Cm_q * wy * D_ref / (2.0 * v)) + (Cm_delta * delta_e)
+        0 =  (Cm_alpha * alpha) + (Cm_delta * delta_e)
+
+        2) Solve for alpha:
+        alpha = -Cm_delta * delta_e / Cm_alpha
+
+        3) Substitute alpha into the z-force equation:
+        F_z      = P_dyn * A_ref * CN
+        m * a_z  = P_dyn * A_ref * CN
+        m * a_z  = P_dyn * A_ref * (CN_alpha * alpha + CN_delta * delta_e)
+        m * a_z  = P_dyn * A_ref * (CN_alpha * (-Cm_delta * delta_e / Cm_alpha) + CN_delta * delta_e)
+
+        4) Solve for delta_e (elevator deflection):
+        delta_e = (m * a_z) / (P_dyn * A_ref * (CN_delta - (CN_alpha * Cm_delta / Cm_alpha)))
+
+        Inputs:
+            az_cmd: Desired acceleration command in body z-axis from guidance law (m/s^2)
+            mass: Missile current mass (kg)
+            P_dyn: Current dynamic pressure (Pa)
+            A_ref: Reference area (m^2)
+            CN_delta: Normal force coefficient derivative with respect to elevator deflection
+            CN_alpha: Normal force coefficient derivative with respect to angle of attack
+            Cm_delta: Pitching moment coefficient derivative with respect to elevator deflection
+            Cm_alpha: Pitching moment coefficient derivative with respect to angle of attack
+        Outputs:
+            delta_pitch_ff: Feedforward pitch control surface deflection command (rad)
+        """
+
+        # Avoid division by zero or very small dynamic pressures
+        P_dyn_eff = max(P_dyn, self.P_dyn_min)
+        delta_pitch_ff = -mass * az_cmd / ((P_dyn_eff * A_ref)*(CN_delta - (CN_alpha * (Cm_delta / Cm_alpha))))
+        return delta_pitch_ff
+
+    def yaw_feedforward_control(self, ay_cmd: float, mass: float, P_dyn: float, A_ref: float, CY_delta: float, CY_beta: float, Cn_delta: float, Cn_beta: float) -> float:
+        """
+        Computes a feedforward yaw control deflection based on the desired acceleration command in the body y-axis from the guidance law.
+        The yaw feedforward term is derived by solving the steady-state aerodynamic equations (Cn = 0, wz = 0) for the deflection required
+        to produce a lateral acceleration along the body y-axis.
+
+        1) Assume yaw moment is zero (Cn = 0, wz = 0)
+        Cn = (Cn_beta * beta) + (Cn_r * wz * D_ref / (2.0 * v)) + (Cn_delta * delta_r)
+        0 =  (Cn_beta * beta) + (Cn_delta * delta_r)
+
+        2) Solve for beta:
+        beta = -Cn_delta * delta_r / Cn_beta
+
+        3) Substitute beta into the y-force equation:
+        F_y     = P_dyn * A_ref * CY
+        m * a_y = P_dyn * A_ref * CY
+        m * a_y = P_dyn * A_ref * (CY_beta * beta + CY_delta * delta_r)
+        m * a_y = P_dyn * A_ref * (CY_beta * (-Cn_delta * delta_r / Cn_beta) + CY_delta * delta_r)
+
+        4) Solve for delta_r (rudder deflection):
+        delta_r = (m * a_y) / (P_dyn * A_ref * (CY_delta - (CY_beta * Cn_delta / Cn_beta)))
+
+        Inputs:
+            ay_cmd: Desired acceleration command in body y-axis from guidance law (m/s^2)
+            mass: Missile current mass (kg)
+            P_dyn: Current dynamic pressure (Pa)
+            A_ref: Reference area (m^2)
+            CY_delta: Side force coefficient derivative with respect to rudder deflection
+            CY_beta: Side force coefficient derivative with respect to sideslip angle
+            Cn_delta: Yawing moment coefficient derivative with respect to rudder deflection
+            Cn_beta: Yawing moment coefficient derivative with respect to sideslip angle
+        Outputs:
+            delta_yaw_ff: Feedforward yaw control surface deflection command (rad)
+        """
+
+        # Avoid division by zero or very small dynamic pressures
+        P_dyn_eff = max(P_dyn, self.P_dyn_min)
+        delta_yaw_ff = mass * ay_cmd / ((P_dyn_eff * A_ref) * (CY_delta - (CY_beta * (Cn_delta / Cn_beta))))
+        return delta_yaw_ff
 
     def roll_feedback_control(self, roll_cmd: float, roll: float, wx: float, dt: float) -> float:
         """

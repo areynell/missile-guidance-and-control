@@ -1,9 +1,11 @@
 import numpy as np
 
+from parameters import GuidanceParams
+
 class MissileGuidance:
-    def __init__(self, max_lat_accel, N=4.0):
-        self.max_lat_accel = max_lat_accel
-        self.N = N
+    def __init__(self, guidance_params: GuidanceParams):
+        self.N = guidance_params.N
+        self.max_lat_accel = guidance_params.max_lateral_accel
 
     def compute_guidance(self, missile_pos, missile_vel, target_pos, target_vel):
             """Calculates the desired lateral acceleration guidance command, perpendicular to the missile's velocity vector, using the pure proportional navigation (PN) guidance law.

@@ -134,14 +134,14 @@ class Missile:
         return np.arcsin(np.clip(vb_rel[1] / vb_rel_mag, -1.0, 1.0))
 
     def update_flight_phase(self):
-        """Updates the missile's current flight phase (BOOST or COAST) based on its mass relative to the dry mass after burnout."""
+        """Updates the missile's current flight phase (boost or coast) based on its mass relative to the dry mass after burnout."""
         if self.mass() > self.m_dry:
-            self.flight_phase = "BOOST"
+            self.flight_phase = "Boost"
         else:
-            self.flight_phase = "COAST"
+            self.flight_phase = "Coast"
 
     def current_flight_phase(self):
-        """Returns the current flight phase of the missile (BOOST or COAST)."""
+        """Returns the current flight phase of the missile (boost or coast)."""
         return self.flight_phase
 
     def thrust(self, mass):
@@ -194,6 +194,7 @@ class Missile:
         return Fb_aero, Fw_aero
 
     def compute_aerodynamic_moments(self, altitude, vb_missile, vi_wind, R_bi, wb, control_deltas):
+        """Calculates the aerodynamic moments acting on the missile in the body frame."""
 
         # Relative velocity in missile's body frame
         vb_rel = vb_missile - R_bi @ vi_wind
@@ -218,16 +219,16 @@ class Missile:
         delta_a, delta_e, delta_r = control_deltas
 
         # Calculate aerodynamic moment coefficients
-        CMx = self.Cl_0 + (self.Cl_p * wx * self.D_ref / (2.0 * vb_rel_mag)) + (self.Cl_delta * delta_a)
-        CMy = self.Cm_0 + (self.Cm_alpha * alpha) + (self.Cm_q * wy * self.D_ref / (2.0 * vb_rel_mag)) + (self.Cm_delta * delta_e)
-        CMz = self.Cn_0 + (self.Cn_beta * beta) + (self.Cn_r * wz * self.D_ref / (2.0 * vb_rel_mag)) + (self.Cn_delta * delta_r)
+        Cl = self.Cl_0 + (self.Cl_p * wx * self.D_ref / (2.0 * vb_rel_mag)) + (self.Cl_delta * delta_a)
+        Cm = self.Cm_0 + (self.Cm_alpha * alpha) + (self.Cm_q * wy * self.D_ref / (2.0 * vb_rel_mag)) + (self.Cm_delta * delta_e)
+        Cn = self.Cn_0 + (self.Cn_beta * beta) + (self.Cn_r * wz * self.D_ref / (2.0 * vb_rel_mag)) + (self.Cn_delta * delta_r)
 
         # Calculate aerodynamic moments in body frame
         # NOTE: It's standard for A_ref (reference area) and D_ref (reference length) to be constants.
         # For missiles, A_ref is typically the maximum cross-sectional area and D_ref is typically the missile diameter.
-        Mx = P_dyn*self.A_ref*self.D_ref*CMx
-        My = P_dyn*self.A_ref*self.D_ref*CMy
-        Mz = P_dyn*self.A_ref*self.D_ref*CMz
+        Mx = P_dyn*self.A_ref*self.D_ref*Cl
+        My = P_dyn*self.A_ref*self.D_ref*Cm
+        Mz = P_dyn*self.A_ref*self.D_ref*Cn
 
         return np.array([Mx, My, Mz], dtype=float)
 
@@ -261,6 +262,8 @@ class Missile:
         return R_ib @ a_lat_body
 
     def update_guidance(self, target):
+        """Updates the missile's desired lateral acceleration based on the guidance law."""
+
         vb = self.velocity()
         q = self.orientation()
         R_ib = utils.quaternion_to_rotation_matrix(q)  # Body to inertial frame rotation matrix
@@ -272,6 +275,8 @@ class Missile:
         self.update_flight_phase()
 
     def update_control(self, dt):
+        """Updates the missile's control surface deflections based on the control law to achieve the desired lateral acceleration from the guidance law."""
+
         p = self.position()
         vb = self.velocity()
         q = self.orientation()
@@ -281,7 +286,6 @@ class Missile:
         R_ib = utils.quaternion_to_rotation_matrix(q) # Body to inertial frame rotation matrix
         R_bi = R_ib.T
 
-        roll_cmd_rad = 0.0 # For skid-to-turn (STT) missiles, we typically command zero roll angle to keep the lift vector aligned with the desired lateral acceleration direction
         a_cmd_body = R_bi @ self.a_lat_desired
 
         # Compute missile's current lateral acceleration
@@ -295,7 +299,11 @@ class Missile:
         rho = self.rho0 * np.exp(-altitude / self.H_scale)
         P_dyn = 0.5 * rho * vb_rel_mag**2
 
-        self.control_deltas = self.controller.update(roll_cmd_rad, a_cmd_body, a_body, wb, q, P_dyn, dt)
+        # Skid-to-turn (STT) missiles typically command zero roll angle
+        roll_cmd_rad = 0.0
+        # NOTE: We're using CL and CY in the wind frame, but should actually be using CN and CY in the body frame. This appoximation only works for low alpha and beta angles
+        # TODO: Think about using a struct/dataclass to pass arguments more cleanly and safely into update() function
+        self.control_deltas = self.controller.update(roll_cmd_rad, a_cmd_body, a_body, wb, q, P_dyn, self.mass(), self.A_ref, self.CL_delta, self.CL_alpha, self.Cm_delta, self.Cm_alpha, self.CY_delta, self.CY_beta, self.Cn_delta, self.Cn_beta, dt)
 
     def dynamics(self, missile_state):
         """6-DOF missile dynamics based on Newton-Euler equations for a rigid body, with forces and moments from gravity, thrust, and aerodynamics."""

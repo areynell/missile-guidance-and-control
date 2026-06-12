@@ -50,8 +50,8 @@ class MissileParams:
 
 @dataclass
 class GuidanceParams:
-    # TODO
-    pass
+    N: float                 # Proportional navigation constant (typically between 3 and 5)
+    max_lateral_accel: float # m/s^2, maximum lateral acceleration command limit for the guidance law
 
 @dataclass
 class ControllerParams:

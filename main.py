@@ -1,7 +1,6 @@
-import os
 import numpy as np
 
-from parameters import AerodynamicParams, MissileParams, PropulsionParams, StructuralParams, AtmosphericParams, WarheadParams, ControllerParams
+from parameters import AerodynamicParams, MissileParams, PropulsionParams, StructuralParams, AtmosphericParams, WarheadParams, ControllerParams, GuidanceParams
 from missile import MissileState, Missile
 from guidance import MissileGuidance
 from controller import MissileController
@@ -57,6 +56,43 @@ def initialize_missile() -> Missile:
         wind_vector = np.zeros(3)
     )
 
+    guidance_params = GuidanceParams(
+        N = 4.0,
+        max_lateral_accel = missile_params.structural.max_lateral_accel
+    )
+
+    missile_guidance = MissileGuidance(guidance_params)
+
+    # Missile flight controller with appropriate gains for roll, pitch, and yaw control
+    v_ref = 500.0
+    controller_params = ControllerParams(
+        # Roll control gains
+        Kp_roll = 0.5,
+        Kp_roll_rate = 0.02,
+        Ki_roll_rate = 0.01,
+
+        # Pitch control gains
+        Kdc_pitch = 1.0,
+        Ka_pitch_rate = 0.1,
+        Ki_pitch_rate = 0.15,
+        Kr_pitch_rate = 0.25,
+
+        # Yaw control gains
+        Kdc_yaw = 1.0,
+        Ka_yaw_rate = 0.1,
+        Ki_yaw_rate = 0.15,
+        Kr_yaw_rate = 0.25,
+
+        # Additional parameters for gain scheduling and anti-windup
+        v_ref = v_ref,
+        P_dyn_ref = 0.5 * atmospheric_params.sea_level_density * v_ref**2,
+        P_dyn_min = 100.0,
+        integral_limit = 2.0,
+        delta_limit = np.deg2rad(45.0)
+    )
+
+    missile_controller = MissileController(controller_params)
+
     # Initial pitch of 45 degrees
     initial_pitch = -np.deg2rad(45.0)
     qw_init = np.cos(initial_pitch / 2.0)
@@ -77,38 +113,6 @@ def initialize_missile() -> Missile:
     initial_state[MissileState.WY] = 0.0
     initial_state[MissileState.WZ] = 0.0
     initial_state[MissileState.M] = missile_params.structural.total_mass
-
-    missile_guidance = MissileGuidance(missile_params.structural.max_lateral_accel, N=4.0)
-
-    # Missile flight controller with appropriate gains for roll, pitch, and yaw control
-    v_ref = 500.0
-    controller_params = ControllerParams(
-        # Roll control gains
-        Kp_roll = 0.5,
-        Kp_roll_rate = 0.02,
-        Ki_roll_rate = 0.01,
-
-        # Pitch control gains
-        Kdc_pitch = 1.0,
-        Ka_pitch_rate = 0.1,
-        Ki_pitch_rate = 0.25,
-        Kr_pitch_rate = 0.25,
-
-        # Yaw control gains
-        Kdc_yaw = 1.0,
-        Ka_yaw_rate = 0.1,
-        Ki_yaw_rate = 0.25,
-        Kr_yaw_rate = 0.25,
-
-        # Additional parameters for gain scheduling and anti-windup
-        v_ref = v_ref,
-        P_dyn_ref = 0.5 * atmospheric_params.sea_level_density * v_ref**2,
-        P_dyn_min = 100.0,
-        integral_limit = 2.0,
-        delta_limit = np.deg2rad(45.0)
-    )
-
-    missile_controller = MissileController(controller_params)
 
     return Missile(initial_state, missile_params, atmospheric_params, missile_guidance, missile_controller)
 
@@ -144,12 +148,10 @@ def main():
     missile = initialize_missile()
     target = initialize_target()
 
-    # Run guidance and control simulation loop
     dt = 0.01
     t_max = 50.0
     missile_log, target_log, intercepted = run_simulation(missile, target, dt, t_max)
 
-    # Generate and display plots and 3D animations
     print("Generating post-flight interception metrics...")
     plot_metrics(missile_log, target_log)
 

@@ -147,11 +147,11 @@ def animate_trajectories(missile_log, target_log):
     ax.set_zlabel('Altitude Z (m)')
     ax.set_title('Surface-To-Air Interception', weight='bold')
 
-    # Find the index where the flight phase switches to COAST
+    # Find the index where the flight phase switches to coast
     flight_phases = missile_log["flight_phase"]
     transition_idx = len(flight_phases)
     for i, flight_phase in enumerate(flight_phases):
-        if flight_phase == "COAST":
+        if flight_phase == "Coast":
             transition_idx = i
             break
 
@@ -161,8 +161,8 @@ def animate_trajectories(missile_log, target_log):
     target_pt = ax.plot([], [], [], marker='o', color='red')[0]
 
     # Split missile trajectory into two lines based on flight phase
-    missile_line_boost, = ax.plot([], [], [], color='orange', linewidth=2, label='Missile (Boost)')
-    missile_line_coast, = ax.plot([], [], [], color='blue', linewidth=2, label='Missile (Coast)')
+    missile_line_boost, = ax.plot([], [], [], color='orange', linewidth=2, label='Missile (Boost Phase)')
+    missile_line_coast, = ax.plot([], [], [], color='blue', linewidth=2, label='Missile (Coast Phase)')
     missile_vel_line, = ax.plot([], [], [], color='black')
     missile_pt = ax.plot([], [], [], marker='o', color='orange')[0]
     a_lat_desired_line = ax.plot([], [], [], color='magenta', label='Desired Lateral Accel (Guidance)')[0]
@@ -172,7 +172,7 @@ def animate_trajectories(missile_log, target_log):
 
     # Interception telemetry text box
     telemetry_text = fig.text(
-        0.02, 0.88, "",
+        0.02, 0.87, "",
         fontsize=11,
         fontfamily='monospace',
         verticalalignment='top',
@@ -269,8 +269,7 @@ def animate_trajectories(missile_log, target_log):
                              f"Dist:         {dist:.1f} m\n"
                              f"Lateral G:    {lateral_g:.1f} G\n"
                              f"Alpha:        {np.degrees(missile_log['alpha'][frame_idx]):.1f} deg\n"
-                             f"Beta:         {np.degrees(missile_log['beta'][frame_idx]):.1f} deg\n")
-
+                             f"Beta:         {np.degrees(missile_log['beta'][frame_idx]):.1f} deg")
 
         telemetry_text.set_text(interception_info)
 
@@ -312,10 +311,20 @@ def animate_6dof_missile(missile_log, target_log, length, diameter,
     Z_cone = R_cone * np.sin(Theta_cone)
     missile_points_cone = np.vstack([X_cone.flatten(), Y_cone.flatten(), Z_cone.flatten()])
 
+    # Interception telemetry text box
+    telemetry_text = fig.text(
+        0.02, 0.87, "",
+        fontsize=11,
+        fontfamily='monospace',
+        verticalalignment='top',
+        bbox=dict(facecolor='white')
+    )
+
     def update(frame_idx):
         ax.clear()
 
         missile_position = missile_log["position"][frame_idx]
+        missile_vel_body = missile_log["velocity"]
         missile_orientation = missile_log["orientation"][frame_idx]
         R_ib = utils.quaternion_to_rotation_matrix(missile_orientation)  # Body -> inertial
 
@@ -385,15 +394,32 @@ def animate_6dof_missile(missile_log, target_log, length, diameter,
         ax.set_xlabel('Inertial X (m)')
         ax.set_ylabel('Inertial Y (m)')
         ax.set_zlabel('Inertial Z (m)')
-        ax.set_title(
-            f'Missile 6-DOF Attitude and Forces\n'
-            f'Time: {missile_log["time"][frame_idx]:.2f} s  |  '
-            f'Speed: {v_norm:.0f} m/s  |  '
-            f'Target Range: {target_range:.1f} m  |  '
-            f'$\\alpha$: {np.rad2deg(alpha):.1f}°,  $\\beta$: {np.rad2deg(beta):.1f}°'
-        )
+        ax.set_title('Missile Orientation and Forces', weight='bold')
         ax.set_box_aspect([1, 1, 1])
         ax.legend(loc='upper right')
+
+        # Update interception telemetry
+        time = missile_log["time"][frame_idx]
+        flight_phase = missile_log["flight_phase"][frame_idx]
+        speed = np.linalg.norm(missile_vel_body[frame_idx])
+        mass = missile_log["mass"][frame_idx]
+        dist = np.linalg.norm(target_log["position"][frame_idx] - missile_log["position"][frame_idx])
+        g = 9.81
+        lateral_g = np.linalg.norm(missile_log["a_lat_achieved"][frame_idx]) / g
+        speed_of_sound = 343.0 # m/s at sea level
+        speed_mach = speed / speed_of_sound
+
+        interception_info = (r"$\bf{Interceptor\ Missile\ Telemetry}$" "\n"
+                             f"Time:         {time:.1f} s\n"
+                             f"Flight Phase: {flight_phase}\n"
+                             f"Speed:        Mach {speed_mach:.1f} ({speed:.0f} m/s)\n"
+                             f"Mass:         {mass:.1f} kg\n"
+                             f"Dist:         {dist:.1f} m\n"
+                             f"Lateral G:    {lateral_g:.1f} G\n"
+                             f"Alpha:        {np.degrees(missile_log['alpha'][frame_idx]):.1f} deg\n"
+                             f"Beta:         {np.degrees(missile_log['beta'][frame_idx]):.1f} deg")
+
+        telemetry_text.set_text(interception_info)
 
     anim = animation.FuncAnimation(fig, update, frames=frames, interval=30, blit=False, repeat=False)
     # # Save animation as a GIF file
