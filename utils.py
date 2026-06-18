@@ -87,3 +87,57 @@ def wind_to_body_rotation_matrix(alpha, beta):
     # Combined rotation from wind frame to body frame
     R_bw = Rz_beta @ Ry_alpha  # body <- wind
     return R_bw
+
+def compute_air_density(altitude, rho0, H_scale):
+    """Calculates air density at a given altitude using an exponential model."""
+
+    altitude = max(altitude, 0.0)
+    return rho0 * np.exp(-altitude / H_scale)
+
+def convert_dict_list_to_dict_array(data_dict):
+    """Converts all lists within a dictionary to numpy arrays."""
+
+    for key in data_dict:
+        if isinstance(data_dict[key], list):
+            data_dict[key] = np.array(data_dict[key])
+
+    return data_dict
+
+def direction_to_rotation_matrix(direction_vector: np.ndarray) -> np.ndarray:
+    """
+    Calculates a 3x3 rotation matrix that aligns the local X-axis (forward)
+    with a given 3D direction vector (like velocity).
+    """
+
+    magnitude = np.linalg.norm(direction_vector)
+
+    # If there is no movement, return identity (no rotation)
+    if magnitude < 1e-3:
+        return np.eye(3)
+
+    # 1. Determine the forward axis (X)
+    # Normalize the input vector to create a unit vector for the X direction.
+    forward_axis = direction_vector / magnitude
+
+    # 2. Determine the left axis (Y)
+    # Find a vector perpendicular to both the global "up" and forward directions.
+    global_up = np.array([0.0, 0.0, 1.0])
+    # NOTE: This is not yet a unit vector, since global_up and forward_axis are generally not orthogonal.
+    left_axis = np.cross(global_up, forward_axis)
+
+    # Singularity check: If flying straight up/down, the cross product will fail.
+    # In this case, manually pick a default "left" direction.
+    left_mag = np.linalg.norm(left_axis)
+    if left_mag < 1e-3:
+        left_axis = np.array([0.0, 1.0, 0.0])
+    # Normalize the left_axis vector to create a unit vector for the Y direction
+    else:
+        left_axis = left_axis / left_mag
+
+    # 3. Determine the up axis (Z)
+    # The Z axis must be perpendicular to both X and Y to complete the coordinate system
+    # NOTE: No need for normalization as forward_axis and left_axis vectors are already unit vectors and orthogonal.
+    up_axis = np.cross(forward_axis, left_axis)
+
+    # Combine the three unit vectors as columns of the rotation matrix
+    return np.column_stack((forward_axis, left_axis, up_axis))

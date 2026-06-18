@@ -7,6 +7,7 @@ Implements and simulates the guidance and control of a 6-DoF surface-to-air miss
 *   **Feedforward Control:** Conversion of required acceleration commands from guidance system into feedforward fin deflection control inputs to improve transient response.
 *   **Feedback Control:** Implementation of a 3-loop cascaded flight controller, which includes a roll PI controller and acceleration-based pitch/yaw controllers with dynamic pressure-based gain scheduling.
 *   **Numerical Simulation:** Implementation of a 4th-order Runge-Kutta (RK4) integration approach for joint state propagation of both interceptor and maneuvering targets.
+*   **Visualization:** Live 3D interception data is visualized using `pyqtgraph` in the main simulation loop.
 
 <p align="center">
   <img src="media/missile_interception_animation.gif" alt="Missile Interception Animation" width="70%">
@@ -21,11 +22,10 @@ Implements and simulates the guidance and control of a 6-DoF surface-to-air miss
 </p>
 
 ## Future Improvements
-1) Add cross-coupling between forces and moments along multiple axes
+1) Add changing moment arm to pitch and yaw due to changing CG from mass flow
 2) Add variable inertia rate due to mass flow in dwbdt equations
-3) Add changing moment arm to pitch and yaw due to changing CG from mass flow
-4) Make force and moment coefficients functions of Mach instead of constants
+3) Make force and moment aerodynamic coefficients functions of Mach
+4) Add cross-coupling to force and moment aerodynamic coefficients
 5) Perform rigorous controller design
-6) Make data logging neater in simulation loop
-7) Implement online plotting/animation in simulation loop using pyqtgraph instead of using offline plotting with matplotlib
-8) Improve controller's integral anti-windup mechanism
+
+6) Improve controller's integral anti-windup mechanism

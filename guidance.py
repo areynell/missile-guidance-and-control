@@ -14,7 +14,6 @@ class MissileGuidance:
             missile_vel: Velocity vector of the missile in the inertial frame
             target_pos: Position vector of the target in the inertial frame
             target_vel: Velocity vector of the target in the inertial frame
-            N: Proportional navigation constant
             """
 
             rel_pos = target_pos - missile_pos

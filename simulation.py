@@ -3,6 +3,59 @@ import numpy as np
 import utils
 from missile import Missile
 from target import Target
+from visualization import SimulationVisualizer
+
+def log_data(missile_log: dict, target_log: dict, missile: Missile, target: Target, t: float):
+    """Logs current missile and target states into the provided log dictionaries."""
+
+    R_ib = utils.quaternion_to_rotation_matrix(missile.orientation())
+    R_bi = R_ib.T
+    alpha = missile.alpha(missile.velocity(), missile.vi_wind, R_bi)
+    beta = missile.beta(missile.velocity(), missile.vi_wind, R_bi)
+    Fb_aero, Fw_aero = missile.compute_aerodynamic_forces(missile.position()[2], missile.velocity(), missile.vi_wind, R_bi, missile.control_deltas)
+    rho = utils.compute_air_density(missile.position()[2], missile.rho0, missile.H_scale)
+    vb_rel = missile.velocity() - R_bi @ missile.vi_wind
+    vb_rel_mag = np.linalg.norm(vb_rel)
+    P_dyn = 0.5 * rho * vb_rel_mag**2
+
+    missile_log["time"].append(t)
+    missile_log["position"].append(missile.position())
+    missile_log["orientation"].append(missile.orientation())
+    missile_log["rpy_deg"].append(utils.quaternion_to_rpy_deg(missile.orientation()))
+    missile_log["velocity"].append(missile.velocity())
+    missile_log["angular_velocity"].append(missile.angular_velocity())
+    missile_log["mass"].append(missile.mass())
+    missile_log["flight_phase"].append(missile.current_flight_phase())
+    missile_log["a_lat_desired"].append(missile.desired_lateral_accel())
+    missile_log["a_lat_achieved"].append(missile.achieved_lateral_accel())
+    missile_log["thrust"].append(missile.thrust(missile.mass()))
+    missile_log["alpha"].append(alpha)
+    missile_log["beta"].append(beta)
+    missile_log["control_deltas"].append(missile.control_deltas)
+    missile_log["Fb_aero"].append(Fb_aero)
+    missile_log["Fw_aero"].append(Fw_aero)
+    missile_log["dynamic_pressure"].append(P_dyn)
+
+    target_log["time"].append(t),
+    target_log["position"].append(target.position()),
+    target_log["velocity"].append(target.velocity())
+
+def early_termination(missile: Missile, target: Target, visualizer: SimulationVisualizer, t: float) -> bool:
+    """Checks various early termination conditions for simulation."""
+
+    if missile.detonate_warhead(target.position()):
+        visualizer.update(t, missile, target)
+        print(f"Proximity detonation. Target destroyed at {t:.2f} s.")
+        return True
+    if target.position()[2] < 0.0:
+        visualizer.update(t, missile, target)
+        print(f"Target impacted the ground at {t:.2f} s.")
+        return True
+    if missile.position()[2] < 0.0:
+        visualizer.update(t, missile, target)
+        print(f"Missile impacted the ground at {t:.2f} s.")
+        return True
+    return False
 
 def update_sim_states(missile: Missile, target: Target, dt: float):
     """Update missile and target jointly using scipy's solve_ivp."""
@@ -45,16 +98,8 @@ def rk4_update(f: callable, state: np.ndarray, dt: float, *args) -> np.ndarray:
     return next_state
 
 # def run_simulation(missile_params: MissileParams, atmospheric_params: AtmosphericParams, missile_initial_state: dict, target_initial_state: dict):
-def run_simulation(missile: Missile, target: Target, dt: float, t_max: float):
+def run_simulation(missile: Missile, target: Target, range_close:float, dt_far: float, dt_close: float, t_max: float):
     """Runs a missile interception simulation and collects data for analysis and visualization."""
-
-    t = 0.0
-    dt_far = dt
-    dt_close = 0.1*dt
-    range_close = 1000.0
-
-    # Data collection
-    intercepted = False
 
     missile_log = {
         "time": [],
@@ -82,9 +127,13 @@ def run_simulation(missile: Missile, target: Target, dt: float, t_max: float):
         "velocity": []
     }
 
-    print("Simulating missile interception...")
+    visualizer = SimulationVisualizer(missile, target)
+    render_frame_skip = 5
 
-    # Guidance and simulation loop
+    # Guidance and control simulation loop
+    t = 0.0
+    i = 0
+    print("Simulating missile interception...")
     while t < t_max:
         rel_range = np.linalg.norm(target.position() - missile.position())
 
@@ -94,87 +143,32 @@ def run_simulation(missile: Missile, target: Target, dt: float, t_max: float):
         else:
             dt = dt_far
 
-        # Computing lateral acceleration command at start of each guidance cycle based on current missile and target states
         missile.update_guidance(target)
         missile.update_control(dt)
 
-        # assert abs(np.dot(missile.lateral_accel_cmd(), missile.velocity())) < 1.0e-6, "Lateral acceleration command is not perpendicular to velocity vector!"
+        log_data(missile_log, target_log, missile, target, t)
 
-        R_ib = utils.quaternion_to_rotation_matrix(missile.orientation())
-        R_bi = R_ib.T
-        alpha = missile.alpha(missile.velocity(), missile.vi_wind, R_bi)
-        beta = missile.beta(missile.velocity(), missile.vi_wind, R_bi)
+        # Update live visualization data
+        if i % render_frame_skip == 0:
+            visualizer.update(t, missile, target)
 
-        print(f"Time: {t:.2f} s, "
-              f"Missile Mass: {missile.mass():.1f} kg, "
-              f"Speed: {missile.speed():.1f} m/s, "
-              f"Target Range: {np.linalg.norm(target.position() - missile.position()):.1f} m, "
-              f"Flight Phase: {missile.current_flight_phase()}, "
-              f"Lateral G: {np.linalg.norm(missile.achieved_lateral_accel()) / missile.g0:.1f} G, "
-              f"Alpha: {np.rad2deg(alpha):.1f} deg, "
-              f"Beta: {np.rad2deg(beta):.1f} deg")
-
-        missile_log["time"].append(t)
-        missile_log["position"].append(missile.position().copy())
-        missile_log["orientation"].append(missile.orientation().copy())
-        missile_log["rpy_deg"].append(utils.quaternion_to_rpy_deg(missile.orientation()).copy())
-        missile_log["velocity"].append(missile.velocity().copy())
-        missile_log["angular_velocity"].append(missile.angular_velocity().copy())
-        missile_log["mass"].append(missile.mass())
-        missile_log["flight_phase"].append(missile.current_flight_phase())
-        missile_log["a_lat_desired"].append(missile.desired_lateral_accel().copy())
-        missile_log["a_lat_achieved"].append(missile.achieved_lateral_accel().copy())
-        missile_log["thrust"].append(missile.thrust(missile.mass()))
-        missile_log["alpha"].append(alpha)
-        missile_log["beta"].append(beta)
-        missile_log["control_deltas"].append(missile.control_deltas.copy())
-        Fb_aero, Fw_aero = missile.compute_aerodynamic_forces(missile.position()[2], missile.velocity(), missile.vi_wind, R_bi, missile.control_deltas)
-        missile_log["Fb_aero"].append(Fb_aero)
-        missile_log["Fw_aero"].append(Fw_aero)
-        missile_log["dynamic_pressure"].append(0.5 * missile.rho0 * np.exp(-missile.position()[2] / missile.H_scale) * np.linalg.norm(missile.velocity() - R_bi @ missile.vi_wind)**2)
-
-        target_log["time"].append(t)
-        target_log["position"].append(target.position().copy())
-        target_log["velocity"].append(target.velocity().copy())
-
-        if rel_range < missile.kill_radius:
-            print(f"Proximity detonation. Target destroyed at {t:.2f} s. Distance: {rel_range:.1f} m")
-            intercepted = True
-            break
-        if target.position()[2] < 0.0:
-            print(f"Target impacted the ground at {t:.2f} s. Distance to missile: {rel_range:.1f} m")
-            intercepted = False
-            break
-        if missile.position()[2] < 0.0:
-            print(f"Missile impacted the ground at {t:.2f} s. Distance to target: {rel_range:.1f} m")
-            intercepted = False
+        # Stop simulation early if termination conditions are met
+        if early_termination(missile, target, visualizer, t):
             break
 
         update_sim_states(missile, target, dt)
         t += dt
+        i += 1
 
-    if not intercepted:
-        print("Target evaded interception.")
+    print(f"Time: {t:.2f} s, "
+          f"Missile Mass: {missile.mass():.1f} kg, "
+          f"Speed: {missile.speed():.1f} m/s, "
+          f"Target Range: {rel_range:.1f} m, "
+          f"Flight Phase: {missile.current_flight_phase()}, "
+          f"Lateral G: {np.linalg.norm(missile_log['a_lat_achieved'][-1]) / missile.g0:.2f} G, "
+          f"Alpha: {np.rad2deg(missile_log['alpha'][-1]):.1f} deg, "
+          f"Beta: {np.rad2deg(missile_log['beta'][-1]):.1f} deg")
 
-    # Convert dict of lists to dict of numpy arrays for easier plotting later
-    missile_log["time"] = np.array(missile_log["time"])
-    missile_log["position"] = np.array(missile_log["position"])
-    missile_log["orientation"] = np.array(missile_log["orientation"])
-    missile_log["rpy_deg"] = np.array(missile_log["rpy_deg"])
-    missile_log["velocity"] = np.array(missile_log["velocity"])
-    missile_log["angular_velocity"] = np.array(missile_log["angular_velocity"])
-    missile_log["mass"] = np.array(missile_log["mass"])
-    missile_log["a_lat_desired"] = np.array(missile_log["a_lat_desired"])
-    missile_log["a_lat_achieved"] = np.array(missile_log["a_lat_achieved"])
-    missile_log["thrust"] = np.array(missile_log["thrust"])
-    missile_log["alpha"] = np.array(missile_log["alpha"])
-    missile_log["beta"] = np.array(missile_log["beta"])
-    missile_log["control_deltas"] = np.array(missile_log["control_deltas"])
-    missile_log["Fb_aero"] = np.array(missile_log["Fb_aero"])
-    missile_log["Fw_aero"] = np.array(missile_log["Fw_aero"])
-    missile_log["dynamic_pressure"] = np.array(missile_log["dynamic_pressure"])
-    target_log["time"] = np.array(target_log["time"])
-    target_log["position"] = np.array(target_log["position"])
-    target_log["velocity"] = np.array(target_log["velocity"])
+    visualizer.finalize()
 
-    return missile_log, target_log, intercepted
+    return missile_log, target_log

@@ -1,10 +1,358 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
+import pyqtgraph as pg
+import pyqtgraph.opengl as gl
+from pyqtgraph.Qt import QtGui
 
 import utils
 
+
+class SimulationVisualizer:
+    """Encapsulates pyqtgraph 3D visualization for live simulation monitoring."""
+
+    def __init__(self, missile, target):
+        self.app = pg.mkQApp("Missile Interception Simulation")
+
+        # Main window setup
+        self.main_window = pg.QtWidgets.QWidget()
+        self.main_window.setWindowTitle('Missile Interception - Live View')
+
+        self.view_elevation = 45.0
+        self.view_azimuth = -90.0
+
+        # Creating two windows, a "far" trajectory view and a "close" missile orientation view
+        self.view_far = gl.GLViewWidget()
+        self.view_far.setCameraPosition(distance=30000, elevation=self.view_elevation, azimuth=self.view_azimuth)
+        self.view_close = gl.GLViewWidget()
+        self.view_close.setCameraPosition(distance=25, elevation=self.view_elevation, azimuth=self.view_azimuth)
+
+        self.layout = pg.QtWidgets.QHBoxLayout(self.main_window)
+        self.layout.addWidget(self.view_far)
+        self.layout.addWidget(self.view_close)
+
+        screen = QtGui.QGuiApplication.primaryScreen().geometry()
+        self.main_window.resize(int(screen.width() * 0.8), int(screen.height() * 0.6))
+        self.main_window.show()
+
+        self.items_far = self._setup_view_items(self.view_far, missile, target)
+        self.items_close = self._setup_view_items(self.view_close, missile, target)
+
+        self._setup_overlays()
+
+        self.force_scale = 0.001
+        self.acceleration_scale = 0.1
+
+        # Pre-allocate buffers for trajectory visualization
+        self.buffer_capacity = 1000
+        self.missile_positions = np.zeros((self.buffer_capacity, 3))
+        self.target_positions = np.zeros((self.buffer_capacity, 3))
+        self.point_count = 0
+        self.flight_phase_change_idx = None
+
+    def update(self, t, missile, target):
+        """Main update loop called by the simulation to refresh the 3D scene."""
+
+        missile_position = missile.position()
+        missile_velocity = missile.velocity()
+
+        target_position = target.position()
+        target_velocity = target.velocity()
+
+        rel_range = np.linalg.norm(target_position - missile_position)
+
+        # Grow buffers if they reach capacity
+        if self.point_count >= self.buffer_capacity:
+            self.buffer_capacity *= 2
+            self.missile_positions.resize((self.buffer_capacity, 3), refcheck=False)
+            self.target_positions.resize((self.buffer_capacity, 3), refcheck=False)
+
+        # Insert new data at the current pointer
+        self.missile_positions[self.point_count] = missile_position
+        self.target_positions[self.point_count] = target_position
+        self.point_count += 1
+
+        # Detect the transition point from boost to coast phase
+        if self.flight_phase_change_idx is None and missile.current_flight_phase() == "Coast":
+            self.flight_phase_change_idx = self.point_count - 1
+
+        # Processing and plotting trajectories
+        missile_trajectory = self.missile_positions[:self.point_count]
+        target_trajectory = self.target_positions[:self.point_count]
+        los_points = np.linspace(missile_position, target_position, max(4, int(rel_range/500)*2))
+
+        if self.flight_phase_change_idx is not None:
+            boost_points = missile_trajectory[:self.flight_phase_change_idx + 1]
+            coast_points = missile_trajectory[self.flight_phase_change_idx:]
+        else:
+            boost_points = missile_trajectory
+            coast_points = None
+
+        for view_items in [self.items_far, self.items_close]:
+            view_items["missile_boost_trajectory"].setData(pos=boost_points)
+            view_items["missile_coast_trajectory"].setData(pos=coast_points)
+            view_items["target_trajectory"].setData(pos=target_trajectory)
+            view_items["los_line"].setData(pos=los_points, mode='lines')
+
+        # Orientations and state calculations
+        R_ib = utils.quaternion_to_rotation_matrix(missile.orientation())
+        R_bi = R_ib.T
+        alpha = missile.alpha(missile.velocity(), missile.vi_wind, R_bi)
+        beta = missile.beta(missile.velocity(), missile.vi_wind, R_bi)
+        R_iw = R_ib @ utils.wind_to_body_rotation_matrix(alpha, beta)
+
+        _, Fw_aero = missile.compute_aerodynamic_forces(missile_position[2], missile_velocity, missile.vi_wind, R_bi, missile.control_deltas)
+        a_lat_desired = missile.desired_lateral_accel()
+        a_lat_achieved = missile.achieved_lateral_accel()
+
+        self._update_telemetry(t, rel_range, missile, alpha, beta)
+
+        for view_items in [self.items_far, self.items_close]:
+            view_items["missile_velocity"].setData(pos=np.vstack((missile_position, missile_position + R_ib @ missile_velocity)))
+            view_items["target_velocity"].setData(pos=np.vstack((target_position, target_position + target_velocity)))
+            view_items["missile_x_axis"].setData(pos=np.vstack((missile_position, missile_position + R_ib @ [missile.L, 0, 0])))
+            view_items["missile_y_axis"].setData(pos=np.vstack((missile_position, missile_position + R_ib @ [0, missile.L, 0])))
+            view_items["missile_z_axis"].setData(pos=np.vstack((missile_position, missile_position + R_ib @ [0, 0, missile.L])))
+            view_items["drag_force"].setData(pos=np.vstack((missile_position, missile_position + (R_iw @ [Fw_aero[0], 0, 0]) * self.force_scale)))
+            view_items["side_force"].setData(pos=np.vstack((missile_position, missile_position + (R_iw @ [0, Fw_aero[1], 0]) * self.force_scale)))
+            view_items["lift_force"].setData(pos=np.vstack((missile_position, missile_position + (R_iw @ [0, 0, Fw_aero[2]]) * self.force_scale)))
+            view_items["desired_lateral_accel"].setData(pos=np.vstack((missile_position, missile_position + a_lat_desired * self.acceleration_scale)))
+            view_items["achieved_lateral_accel"].setData(pos=np.vstack((missile_position, missile_position + a_lat_achieved * self.acceleration_scale)))
+
+        # Missile Mesh Transformations
+        # Construct the base 4x4 transformation matrix for the missile
+        missile_base_transform = self._homogeneous_transform(R_ib, missile_position)
+
+        # Missile cylinder (main body) offset and orientation
+        missile_center_offset = -missile.L / 2.0
+        missile_body_transform = QtGui.QMatrix4x4(missile_base_transform)
+        missile_body_transform.translate(missile_center_offset, 0.0, 0.0)
+        missile_body_transform.rotate(90.0, 0.0, 1.0, 0.0)
+
+        # Missile cone (nose) offset and orientation
+        missile_cone_offset = missile.L / 2.0 - 0.2 * missile.L
+        missile_nose_transform = QtGui.QMatrix4x4(missile_base_transform)
+        missile_nose_transform.translate(missile_cone_offset, 0.0, 0.0)
+        missile_nose_transform.rotate(90.0, 0.0, 1.0, 0.0)
+
+        # Target Mesh Transformations
+        # Compute target orientation based on its current velocity vector
+        R_target = utils.direction_to_rotation_matrix(target_velocity)
+        # Construct the base 4x4 transformation matrix for the target
+        target_base_transform = self._homogeneous_transform(R_target, target_position)
+
+        # Target cylinder (main body) offset and orientation
+        target_center_offset = -target.L / 2.0
+        target_body_transform = QtGui.QMatrix4x4(target_base_transform)
+        target_body_transform.translate(target_center_offset, 0.0, 0.0)
+        target_body_transform.rotate(90.0, 0.0, 1.0, 0.0)
+
+        # Target cone (nose) offset and orientation
+        target_cone_offset = target.L / 2.0 - 0.2 * target.L
+        target_nose_transform = QtGui.QMatrix4x4(target_base_transform)
+        target_nose_transform.translate(target_cone_offset, 0.0, 0.0)
+        target_nose_transform.rotate(90.0, 0.0, 1.0, 0.0)
+
+        # Updating the missile and target items with new transformations
+        fin_angles = [45, 135, 225, 315]
+        for view_items in [self.items_far, self.items_close]:
+            # Update missile body and nose
+            view_items["missile_cylinder"].setTransform(missile_body_transform)
+            view_items["missile_cone"].setTransform(missile_nose_transform)
+
+            # Update missile fins
+            for fin_idx, angle_deg in enumerate(fin_angles):
+                missile_fin_transform = self._transform_fin(angle_deg, missile_base_transform, missile.L, missile.D_ref/2)
+                view_items[f"missile_fin{fin_idx+1}"].setTransform(missile_fin_transform)
+
+            # Update target body and nose
+            view_items["target_cylinder"].setTransform(target_body_transform)
+            view_items["target_cone"].setTransform(target_nose_transform)
+
+            # Update target fins
+            for fin_idx, angle_deg in enumerate(fin_angles):
+                target_fin_transform = self._transform_fin(angle_deg, target_base_transform, target.L, target.D_ref/2, fin_scale_xy=1.0, fin_scale_z=0.8)
+                view_items[f"target_fin{fin_idx+1}"].setTransform(target_fin_transform)
+
+        self.view_close.opts['center'] = pg.QtGui.QVector3D(*missile_position)
+        self.view_far.opts['center'] = pg.QtGui.QVector3D(*((missile_position + target_position)/2))
+
+        self._position_overlays()
+        self._sync_view_angles()
+        self.app.processEvents()
+
+    def finalize(self):
+        """Handles post-simulation window management."""
+        if self.main_window.isVisible():
+            print("Simulation finished. Close the window to continue.")
+            self.app.exec()
+
+    def _setup_view_items(self, view, missile, target):
+        """Initializes the 3D items for a given view."""
+
+        grid = gl.GLGridItem()
+        grid.scale(5000, 5000, 1)
+        view.addItem(grid)
+
+        # Fin mesh data
+        vertices = np.array([[-0.5,-0.5,-0.5],[0.5,-0.5,-0.5],[0.5,0.5,-0.5],[-0.5,0.5,-0.5],[-0.5,-0.5,0.5],[-0.2,-0.5,0.5],[-0.2,0.5,0.5],[-0.5,0.5,0.5]])
+        faces = np.array([[0,1,2],[0,2,3],[4,5,6],[4,6,7],[0,1,5],[0,5,4],[1,2,6],[1,6,5],[2,3,7],[2,7,6],[3,0,4],[3,4,7]])
+        fin_meshdata = gl.MeshData(vertexes=vertices, faces=faces)
+
+        items = {
+            "missile_boost_trajectory": gl.GLLinePlotItem(color=(1, 0.5, 0, 1), width=6.0, antialias=True),
+            "missile_coast_trajectory": gl.GLLinePlotItem(color=(0, 0.4, 1, 1), width=6.0, antialias=True),
+            "target_trajectory": gl.GLLinePlotItem(color=(1, 0, 0, 1), width=5.0, antialias=True),
+            "los_line": gl.GLLinePlotItem(color=(0.5, 0.5, 0.5, 1), width=3.0, antialias=True),
+            "missile_velocity": gl.GLLinePlotItem(color=(1, 1, 1, 1), width=6.0, antialias=True),
+            "target_velocity": gl.GLLinePlotItem(color=(1, 1, 1, 1), width=6.0, antialias=True),
+            "missile_x_axis": gl.GLLinePlotItem(color=(1, 0, 0, 1), width=8.0, antialias=True),
+            "missile_y_axis": gl.GLLinePlotItem(color=(0, 1, 0, 1), width=8.0, antialias=True),
+            "missile_z_axis": gl.GLLinePlotItem(color=(0, 0, 1, 1), width=8.0, antialias=True),
+            "drag_force": gl.GLLinePlotItem(color=(1, 0.6, 0, 1), width=6.0, antialias=True),
+            "side_force": gl.GLLinePlotItem(color=(0.5, 0, 0.5, 1), width=6.0, antialias=True),
+            "lift_force": gl.GLLinePlotItem(color=(1, 1, 0, 1), width=6.0, antialias=True),
+            "desired_lateral_accel": gl.GLLinePlotItem(color=(1, 0, 1, 1), width=6.0, antialias=True),
+            "achieved_lateral_accel": gl.GLLinePlotItem(color=(0, 1, 1, 1), width=6.0, antialias=True),
+            "missile_cylinder": gl.GLMeshItem(meshdata=gl.MeshData.cylinder(rows=10, cols=40, radius=[missile.D_ref/2, missile.D_ref/2], length=missile.L*0.8), color=(0.5,0.5,0.5,1.0), shader='shaded'),
+            "missile_cone": gl.GLMeshItem(meshdata=gl.MeshData.cylinder(rows=10, cols=40, radius=[missile.D_ref/2, 0.0], length=missile.L*0.2), color=(0.7,0.7,0.7,1.0), shader='shaded'),
+            "missile_fin1": gl.GLMeshItem(meshdata=fin_meshdata, color=(0.6,0.6,0.6,1.0), shader='shaded'),
+            "missile_fin2": gl.GLMeshItem(meshdata=fin_meshdata, color=(0.6,0.6,0.6,1.0), shader='shaded'),
+            "missile_fin3": gl.GLMeshItem(meshdata=fin_meshdata, color=(0.6,0.6,0.6,1.0), shader='shaded'),
+            "missile_fin4": gl.GLMeshItem(meshdata=fin_meshdata, color=(0.6,0.6,0.6,1.0), shader='shaded'),
+            "target_cylinder": gl.GLMeshItem(meshdata=gl.MeshData.cylinder(rows=10, cols=40, radius=[target.D_ref/2, target.D_ref/2], length=target.L*0.8), color=(0.5,0.1,0.1,1.0), shader='shaded'),
+            "target_cone": gl.GLMeshItem(meshdata=gl.MeshData.cylinder(rows=10, cols=40, radius=[target.D_ref/2, 0.0], length=target.L*0.2), color=(0.7,0.2,0.2,1.0), shader='shaded'),
+            "target_fin1": gl.GLMeshItem(meshdata=fin_meshdata, color=(0.6,0.2,0.2,1.0), shader='shaded'),
+            "target_fin2": gl.GLMeshItem(meshdata=fin_meshdata, color=(0.6,0.2,0.2,1.0), shader='shaded'),
+            "target_fin3": gl.GLMeshItem(meshdata=fin_meshdata, color=(0.6,0.2,0.2,1.0), shader='shaded'),
+            "target_fin4": gl.GLMeshItem(meshdata=fin_meshdata, color=(0.6,0.2,0.2,1.0), shader='shaded')
+        }
+        for ax in ["missile_x_axis", "missile_y_axis", "missile_z_axis"]: items[ax].setGLOptions('additive')
+        for item in items.values(): view.addItem(item)
+        return items
+
+    def _setup_overlays(self):
+        """Initializes the legend and telemetry overlays."""
+
+        trajectory_legend_entries = [
+            ((1, 0, 0), "Target Trajectory"),
+            ((1, 0.5, 0), "Missile Trajectory (Boost Phase)"),
+            ((0, 0.4, 1), "Missile Trajectory (Coast Phase)")
+        ]
+        missile_legend_entries = [
+            ((1, 0, 0), "Missile Body X"),
+            ((0, 1, 0), "Missile Body Y"),
+            ((0, 0, 1), "Missile Body Z"),
+            ((1, 1, 1), "Velocity Vector (m/s)"),
+            ((1, 0, 1), "Desired Lateral Acceleration (m/s^2)"),
+            ((0, 1, 1), "Achieved Lateral Acceleration (m/s^2)"),
+            ((1, 0.6, 0), "Drag (Wind Frame) (N)"),
+            ((0.5, 0, 0.5), "Side Force (Wind Frame) (N)"),
+            ((1, 1, 0), "Lift (Wind Frame) (N)")
+        ]
+
+        self.legend_far = self._create_legend_widget(self.view_far, trajectory_legend_entries)
+        self.legend_far.show()
+
+        self.legend_close = self._create_legend_widget(self.view_close, missile_legend_entries)
+        self.legend_close.show()
+
+        self.telemetry_label = pg.QtWidgets.QLabel(self.view_far)
+        self.telemetry_label.setStyleSheet("background-color: rgba(255, 255, 255, 180); padding: 8px; border: 1px solid black; font-family: monospace; font-size: 11pt;")
+        self.telemetry_label.move(10, 10)
+        self.telemetry_label.show()
+
+        self._position_overlays()
+
+    def _position_overlays(self):
+        """Recalculates positions for floating UI overlays to handle window resizing."""
+
+        # Right-align the far trajectory view legend
+        x_pos_far = self.view_far.width() - self.legend_far.width() - 10
+        self.legend_far.move(max(10, x_pos_far), 10)
+
+        # Left-align the close missile view legend
+        self.legend_close.move(10, 10)
+
+    def _create_legend_widget(self, parent, entries):
+        """Creates legend overlay."""
+
+        widget = pg.QtWidgets.QWidget(parent)
+        widget.setStyleSheet("background-color: rgba(255, 255, 255, 180); padding: 5px; border: 1px solid black;")
+        layout = pg.QtWidgets.QGridLayout(widget)
+        for row_idx, (color, text) in enumerate(entries):
+            color_box = pg.QtWidgets.QLabel()
+            color_box.setFixedSize(20, 10)
+            color_box.setStyleSheet(f"background-color: rgb({int(color[0]*255)}, {int(color[1]*255)}, {int(color[2]*255)});")
+            label = pg.QtWidgets.QLabel(text)
+            label.setStyleSheet("border: none; background-color: transparent; font-weight: bold; font-family: sans-serif; font-size: 9pt;")
+            layout.addWidget(color_box, row_idx, 0)
+            layout.addWidget(label, row_idx, 1)
+        widget.adjustSize()
+        return widget
+
+    def _update_telemetry(self, t, rel_range, missile, alpha, beta):
+        """Updates the telemetry overlay."""
+
+        speed = missile.speed()
+        lateral_g = np.linalg.norm(missile.achieved_lateral_accel()) / 9.81
+        speed_mach = speed / 343.0
+
+        telemetry = (
+            f"<b><font size='+1'>Missile Telemetry</font></b>"
+            f"<table style='margin-top: 5px;'>"
+            f"<tr><td>Time:</td><td style='padding-left: 10px;'>{t: >6.1f} s</td></tr>"
+            f"<tr><td>Phase:</td><td style='padding-left: 10px;'>{missile.current_flight_phase()}</td></tr>"
+            f"<tr><td>Speed:</td><td style='padding-left: 10px;'>Mach {speed_mach: >6.1f} ({speed:.0f} m/s)</td></tr>"
+            f"<tr><td>Mass:</td><td style='padding-left: 10px;'>{missile.mass(): >6.1f} kg</td></tr>"
+            f"<tr><td>Range:</td><td style='padding-left: 10px;'>{rel_range: >6.1f} m</td></tr>"
+            f"<tr><td>Altitude:</td><td style='padding-left: 10px;'>{missile.position()[2]: >6.1f} m</td></tr>"
+            f"<tr><td>Lateral G:</td><td style='padding-left: 10px;'>{lateral_g: >6.1f} G</td></tr>"
+            f"<tr><td>Alpha:</td><td style='padding-left: 10px;'>{np.rad2deg(alpha): >6.1f} deg</td></tr>"
+            f"<tr><td>Beta:</td><td style='padding-left: 10px;'>{np.rad2deg(beta): >6.1f} deg</td></tr>"
+            f"</table>"
+        )
+        self.telemetry_label.setText(telemetry)
+        self.telemetry_label.adjustSize()
+
+    def _sync_view_angles(self):
+        """Synchronizes view angles between the far and close view windows."""
+
+        # Setting view_close to match view_far
+        if self.view_far.opts['elevation'] != self.view_elevation or self.view_far.opts['azimuth'] != self.view_azimuth:
+            self.view_elevation = self.view_far.opts['elevation']
+            self.view_azimuth = self.view_far.opts['azimuth']
+            self.view_close.setCameraPosition(elevation=self.view_elevation, azimuth=self.view_azimuth)
+        # Setting view_far to match view_close
+        elif self.view_close.opts['elevation'] != self.view_elevation or self.view_close.opts['azimuth'] != self.view_azimuth:
+            self.view_elevation = self.view_close.opts['elevation']
+            self.view_azimuth = self.view_close.opts['azimuth']
+            self.view_far.setCameraPosition(elevation=self.view_elevation, azimuth=self.view_azimuth)
+
+    def _transform_fin(self, rotation_angle, base_transform, body_length, fin_radius, fin_scale_xy=0.5, fin_scale_z=0.4):
+        """Creates fin transformation matrices."""
+
+        fin_transform = QtGui.QMatrix4x4(base_transform)
+        fin_transform.rotate(rotation_angle, 1, 0, 0)
+        fin_transform.translate(-body_length/2 + fin_scale_xy/2.0, 0, fin_radius + fin_scale_z/2)
+        fin_transform.scale(fin_scale_xy, 0.03, fin_scale_z)
+        return fin_transform
+
+    def _homogeneous_transform(self, rotation_matrix, translation_vector):
+        """Creates a homogeneous transformation matrix from a rotation matrix and a translation vector."""
+
+        transform = QtGui.QMatrix4x4(rotation_matrix[0, 0], rotation_matrix[0, 1], rotation_matrix[0, 2], translation_vector[0],
+                                     rotation_matrix[1, 0], rotation_matrix[1, 1], rotation_matrix[1, 2], translation_vector[1],
+                                     rotation_matrix[2, 0], rotation_matrix[2, 1], rotation_matrix[2, 2], translation_vector[2],
+                                     0.0,                0.0,                0.0,                1.0)
+
+        return transform
+
 def plot_metrics(missile_log, target_log):
+    # Convert all python lists to numpy arrays for missile_log and target_log
+    missile_log = utils.convert_dict_list_to_dict_array(missile_log)
+    target_log = utils.convert_dict_list_to_dict_array(target_log)
+
     fig, axes = plt.subplots(4, 3, figsize=(16, 8), constrained_layout=True)
     fig.suptitle('Missile Interception Metrics', fontsize=14, weight='bold')
 
@@ -343,7 +691,7 @@ def animate_6dof_missile(missile_log, target_log, length, diameter,
                 color=color, alpha=0.3, edgecolor='gray', linewidth=0.5)
 
         # Body axes
-        axis_length = length * 0.8
+        axis_length = length
         for label, color, body_axes in [
             ('Body X (Forward)', 'red', np.array([axis_length, 0.0, 0.0])),
             ('Body Y (Left)',    'green', np.array([0.0, axis_length, 0.0])),

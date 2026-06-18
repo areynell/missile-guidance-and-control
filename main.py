@@ -6,7 +6,7 @@ from guidance import MissileGuidance
 from controller import MissileController
 from target import TargetState, Target
 from simulation import run_simulation
-from visualization import plot_metrics, animate_trajectories, animate_6dof_missile
+from visualization import plot_metrics
 
 def initialize_missile() -> Missile:
     """Initializes missile with parameters, initial state, guidance, and control."""
@@ -15,7 +15,7 @@ def initialize_missile() -> Missile:
         aero = AerodynamicParams(
             CD_0 = 0.1,
             CD_alpha = 5.0,
-            CD_delta = 2.0,
+            CD_delta = 1.0,
             CY_0 = 0.0,
             CY_beta = -20.0,
             CY_delta = 2.0,
@@ -142,24 +142,23 @@ def initialize_target() -> Target:
     initial_state[TargetState.WY] = np.random.uniform(-0.1, 0.1)
     initial_state[TargetState.WZ] = np.random.uniform(-0.1, 0.1)
 
+    print("Target Initial State:")
+    print(initial_state)
+
     return Target(initial_state)
 
 def main():
     missile = initialize_missile()
     target = initialize_target()
 
-    dt = 0.01
-    t_max = 50.0
-    missile_log, target_log, intercepted = run_simulation(missile, target, dt, t_max)
+    range_close = 1000.0
+    dt_far = 0.01
+    dt_close = 0.5*dt_far
+    t_max = 100.0
+    missile_log, target_log = run_simulation(missile, target, range_close, dt_far, dt_close, t_max)
 
     print("Generating post-flight interception metrics...")
     plot_metrics(missile_log, target_log)
-
-    print("Generating trajectory animation...")
-    animate_trajectories(missile_log, target_log)
-
-    print("Generating orientation and force animation...")
-    animate_6dof_missile(missile_log, target_log, length=missile.L, diameter=missile.D_ref)
 
 if __name__ == "__main__":
     main()

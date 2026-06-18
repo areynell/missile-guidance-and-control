@@ -96,6 +96,8 @@ class Missile:
         self.controller = missile_controller
         self.control_deltas = np.zeros(3, dtype=float) # [delta_a, delta_e, delta_r]
 
+        self.prev_rel_range = np.inf
+
     def position(self):
         """Returns the missile's position vector in the inertial frame."""
         return self.state[MissileState.X:MissileState.Z+1]
@@ -166,15 +168,15 @@ class Missile:
             return np.zeros(3, dtype=float), np.zeros(3, dtype=float) # No aerodynamic forces if relative velocity is near zero to avoid numerical issues
 
         # Dynamic pressure
-        altitude = max(altitude, 0.0) # Altitude clamped to zero
-        rho = self.rho0 * np.exp(-altitude / self.H_scale)
+        rho = utils.compute_air_density(altitude, self.rho0, self.H_scale)
         P_dyn = 0.5 * rho * vb_rel_mag**2
 
         # Roll (aileron), pitch (elevator) and yaw (rudder) control surface deflections
         delta_a, delta_e, delta_r = control_deltas
 
         # Calculate aerodynamic force coefficients in the wind (relative velocity) frame
-        CD = self.CD_0 + (self.CD_alpha * alpha**2) + self.CD_delta * (delta_e**2 + delta_r**2)
+        alpha_total = np.arccos(np.cos(alpha) * np.cos(beta))
+        CD = self.CD_0 + (self.CD_alpha * alpha_total**2) + (self.CD_delta * (delta_e**2 + delta_r**2))
         CY = self.CY_0 + (self.CY_beta * beta) + (self.CY_delta * delta_r)
         CL = self.CL_0 + (self.CL_alpha * alpha) + (self.CL_delta * delta_e)
 
@@ -193,6 +195,22 @@ class Missile:
 
         return Fb_aero, Fw_aero
 
+    def detonate_warhead(self, target_pos: np.ndarray) -> bool:
+        """
+        Checks if the missile's warhead should detonate based on reaching the point of closest approach
+        while being within the lethal kill radius.
+        """
+
+        rel_pos = target_pos - self.position()
+        rel_range = np.linalg.norm(rel_pos)
+
+        # Trigger if missile is within kill radius AND has passed the point of closest approach
+        if self.prev_rel_range < self.kill_radius and rel_range > self.prev_rel_range:
+            return True
+
+        self.prev_rel_range = rel_range
+        return False
+
     def compute_aerodynamic_moments(self, altitude, vb_missile, vi_wind, R_bi, wb, control_deltas):
         """Calculates the aerodynamic moments acting on the missile in the body frame."""
 
@@ -208,8 +226,7 @@ class Missile:
             return np.zeros(3, dtype=float) # No aerodynamic moments if relative velocity is near zero to avoid numerical issues
 
         # Dynamic pressure
-        altitude = max(altitude, 0.0) # Altitude clamped to zero
-        rho = self.rho0 * np.exp(-altitude / self.H_scale)
+        rho = utils.compute_air_density(altitude, self.rho0, self.H_scale)
         P_dyn = 0.5 * rho * vb_rel_mag**2
 
         # Angular velocity components in body frame
@@ -295,8 +312,7 @@ class Missile:
         # Dynamic pressure
         vb_rel = vb - R_bi @ self.vi_wind
         vb_rel_mag = np.linalg.norm(vb_rel)
-        altitude = max(p[2], 0.0) # Altitude clamped to zero
-        rho = self.rho0 * np.exp(-altitude / self.H_scale)
+        rho = utils.compute_air_density(p[2], self.rho0, self.H_scale)
         P_dyn = 0.5 * rho * vb_rel_mag**2
 
         # Skid-to-turn (STT) missiles typically command zero roll angle

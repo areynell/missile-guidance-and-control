@@ -17,8 +17,10 @@ class Target:
 
     NUM_STATES = len(TargetState)
 
-    def __init__(self, initial_state: np.ndarray):
+    def __init__(self, initial_state: np.ndarray, length: float = 12.0, diameter: float = 1.0):
         self.state = initial_state
+        self.L = length
+        self.D_ref = diameter
 
     def position(self):
         return self.state[TargetState.X:TargetState.Z+1]
