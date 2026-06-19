@@ -10,11 +10,11 @@ Implements and simulates the guidance and control of a 6-DoF surface-to-air miss
 *   **Visualization:** Live 3D interception data is visualized using `pyqtgraph` in the main simulation loop.
 
 <p align="center">
-  <img src="media/live_sim_visualization.gif" alt="Missile Interception Animation" width="70%">
+  <img src="media/live_sim_visualization.gif" alt="Missile Interception Animation" width="100%">
 </p>
 
 <p align="center">
-  <img src="media/missile_interception_metrics.png" alt="Missile Interception Metrics" width="70%">
+  <img src="media/missile_interception_metrics.png" alt="Missile Interception Metrics" width="100%">
 </p>
 
 
