@@ -97,8 +97,7 @@ def rk4_update(f: callable, state: np.ndarray, dt: float, *args) -> np.ndarray:
     next_state = state + (dt / 6.0) * (k1 + 2.0*k2 + 2.0*k3 + k4)
     return next_state
 
-# def run_simulation(missile_params: MissileParams, atmospheric_params: AtmosphericParams, missile_initial_state: dict, target_initial_state: dict):
-def run_simulation(missile: Missile, target: Target, range_close:float, dt_far: float, dt_close: float, t_max: float):
+def run_simulation(missile: Missile, target: Target, range_close:float, dt_far: float, dt_close: float, t_max: float, record: bool = False):
     """Runs a missile interception simulation and collects data for analysis and visualization."""
 
     missile_log = {
@@ -127,7 +126,7 @@ def run_simulation(missile: Missile, target: Target, range_close:float, dt_far: 
         "velocity": []
     }
 
-    visualizer = SimulationVisualizer(missile, target)
+    visualizer = SimulationVisualizer(missile, target, record)
     render_frame_skip = 5
 
     # Guidance and control simulation loop

@@ -1,9 +1,10 @@
 from enum import IntEnum
 import numpy as np
 
-from parameters import AtmosphericParams, MissileParams, MissileParams
+from parameters import AtmosphericParams, MissileParams
 from guidance import MissileGuidance
 from controller import MissileController
+from target import Target
 import utils
 
 class MissileState(IntEnum):
@@ -98,36 +99,36 @@ class Missile:
 
         self.prev_rel_range = np.inf
 
-    def position(self):
+    def position(self) -> np.ndarray:
         """Returns the missile's position vector in the inertial frame."""
         return self.state[MissileState.X:MissileState.Z+1]
 
-    def orientation(self):
+    def orientation(self) -> np.ndarray:
         """Returns the missile's orientation as a quaternion (qw, qx, qy, qz) representing the rotation from the body frame to the inertial frame."""
         return self.state[MissileState.QW:MissileState.QZ+1]
 
-    def velocity(self):
+    def velocity(self) -> np.ndarray:
         """Returns the missile's velocity vector in the body frame."""
         return self.state[MissileState.VX:MissileState.VZ+1]
 
-    def angular_velocity(self):
+    def angular_velocity(self) -> np.ndarray:
         """Returns the missile's angular velocity vector in the body frame."""
         return self.state[MissileState.WX:MissileState.WZ+1]
 
-    def speed(self):
+    def speed(self) -> float:
         """Returns the missile's speed (velocity magnitude)."""
         return np.linalg.norm(self.velocity())
 
-    def mass(self):
+    def mass(self) -> float:
         """Returns the missile's mass."""
         return self.state[MissileState.M]
 
-    def alpha(self, vb_missile, vi_wind, R_bi):
+    def alpha(self, vb_missile: np.ndarray, vi_wind: np.ndarray, R_bi: np.ndarray) -> float:
         """Calculates the missile's angle of attack based on the its velocity vector in the body frame and the wind velocity in the inertial frame."""
         vb_rel = vb_missile - R_bi @ vi_wind
         return np.arctan2(vb_rel[2], vb_rel[0])
 
-    def beta(self, vb_missile, vi_wind, R_bi):
+    def beta(self, vb_missile: np.ndarray, vi_wind: np.ndarray, R_bi: np.ndarray) -> float:
         """Calculates the missile's sideslip angle based on the its velocity vector in the body frame and the wind velocity in the inertial frame."""
         vb_rel = vb_missile - R_bi @ vi_wind
         vb_rel_mag = np.linalg.norm(vb_rel)
@@ -142,18 +143,18 @@ class Missile:
         else:
             self.flight_phase = "Coast"
 
-    def current_flight_phase(self):
+    def current_flight_phase(self) -> str:
         """Returns the current flight phase of the missile (boost or coast)."""
         return self.flight_phase
 
-    def thrust(self, mass):
+    def thrust(self, mass: float) -> np.ndarray:
         """Returns the thrust vector along the missile's longitudinal axis."""
         if mass > self.m_dry:
             return np.array([self.T, 0.0, 0.0], dtype=float)
         else:
             return np.array([0.0, 0.0, 0.0], dtype=float)
 
-    def compute_aerodynamic_forces(self, altitude, vb_missile, vi_wind, R_bi, control_deltas):
+    def compute_aerodynamic_forces(self, altitude: float, vb_missile: np.ndarray, vi_wind: np.ndarray, R_bi: np.ndarray, control_deltas: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """Calculates the aerodynamic forces acting on the missile in the wind frame, and then transforms them back to the body frame."""
 
         # All aerodynamic forces are computed w.r.t. the wind (relative velocity) frame, since this is what the missile "feels" aerodynamically
@@ -195,23 +196,7 @@ class Missile:
 
         return Fb_aero, Fw_aero
 
-    def detonate_warhead(self, target_pos: np.ndarray) -> bool:
-        """
-        Checks if the missile's warhead should detonate based on reaching the point of closest approach
-        while being within the lethal kill radius.
-        """
-
-        rel_pos = target_pos - self.position()
-        rel_range = np.linalg.norm(rel_pos)
-
-        # Trigger if missile is within kill radius AND has passed the point of closest approach
-        if self.prev_rel_range < self.kill_radius and rel_range > self.prev_rel_range:
-            return True
-
-        self.prev_rel_range = rel_range
-        return False
-
-    def compute_aerodynamic_moments(self, altitude, vb_missile, vi_wind, R_bi, wb, control_deltas):
+    def compute_aerodynamic_moments(self, altitude: float, vb_missile: np.ndarray, vi_wind: np.ndarray, R_bi: np.ndarray, wb: np.ndarray, control_deltas: np.ndarray) -> np.ndarray:
         """Calculates the aerodynamic moments acting on the missile in the body frame."""
 
         # Relative velocity in missile's body frame
@@ -249,11 +234,27 @@ class Missile:
 
         return np.array([Mx, My, Mz], dtype=float)
 
-    def desired_lateral_accel(self):
+    def detonate_warhead(self, target_pos: np.ndarray) -> bool:
+        """
+        Checks if the missile's warhead should detonate based on reaching the point of closest approach
+        while being within the lethal kill radius.
+        """
+
+        rel_pos = target_pos - self.position()
+        rel_range = np.linalg.norm(rel_pos)
+
+        # Trigger if missile is within kill radius AND has passed the point of closest approach
+        if self.prev_rel_range < self.kill_radius and rel_range > self.prev_rel_range:
+            return True
+
+        self.prev_rel_range = rel_range
+        return False
+
+    def desired_lateral_accel(self) -> np.ndarray:
         """Returns the guidance law's desired lateral acceleration in the inertial frame."""
         return self.a_lat_desired
 
-    def achieved_lateral_accel(self):
+    def achieved_lateral_accel(self) -> np.ndarray:
         """Computes the achieved lateral acceleration executed by the flight controller in the inertial frame, excluding thrust (axial) contribution."""
 
         # TODO: Check that these calculations are correct. Pure PN gives desired lateral acceleration relative to the missile's velocity vector, whereas
@@ -278,7 +279,7 @@ class Missile:
         # Rotate lateral acceleration to inertial frame for comparison with desired lateral acceleration from guidance law
         return R_ib @ a_lat_body
 
-    def update_guidance(self, target):
+    def update_guidance(self, target: Target) -> np.ndarray:
         """Updates the missile's desired lateral acceleration based on the guidance law."""
 
         vb = self.velocity()
@@ -291,7 +292,7 @@ class Missile:
         self.a_lat_desired = self.guidance.compute_guidance(self.position(), vi, target.position(), target.velocity())
         self.update_flight_phase()
 
-    def update_control(self, dt):
+    def update_control(self, dt: float):
         """Updates the missile's control surface deflections based on the control law to achieve the desired lateral acceleration from the guidance law."""
 
         p = self.position()
@@ -321,7 +322,7 @@ class Missile:
         # TODO: Think about using a struct/dataclass to pass arguments more cleanly and safely into update() function
         self.control_deltas = self.controller.update(roll_cmd_rad, a_cmd_body, a_body, wb, q, P_dyn, self.mass(), self.A_ref, self.CL_delta, self.CL_alpha, self.Cm_delta, self.Cm_alpha, self.CY_delta, self.CY_beta, self.Cn_delta, self.Cn_beta, dt)
 
-    def dynamics(self, missile_state):
+    def dynamics(self, missile_state: np.ndarray) -> np.ndarray:
         """6-DOF missile dynamics based on Newton-Euler equations for a rigid body, with forces and moments from gravity, thrust, and aerodynamics."""
 
         p = missile_state[MissileState.X:MissileState.Z+1]

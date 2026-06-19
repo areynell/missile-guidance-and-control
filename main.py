@@ -155,7 +155,7 @@ def main():
     dt_far = 0.01
     dt_close = 0.5*dt_far
     t_max = 100.0
-    missile_log, target_log = run_simulation(missile, target, range_close, dt_far, dt_close, t_max)
+    missile_log, target_log = run_simulation(missile, target, range_close, dt_far, dt_close, t_max, record=False)
 
     print("Generating post-flight interception metrics...")
     plot_metrics(missile_log, target_log)

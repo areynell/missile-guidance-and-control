@@ -4,6 +4,8 @@ import matplotlib.animation as animation
 import pyqtgraph as pg
 import pyqtgraph.opengl as gl
 from pyqtgraph.Qt import QtGui
+from PIL import Image
+import os
 
 import utils
 
@@ -11,15 +13,19 @@ import utils
 class SimulationVisualizer:
     """Encapsulates pyqtgraph 3D visualization for live simulation monitoring."""
 
-    def __init__(self, missile, target):
+    def __init__(self, missile, target, record=False):
         self.app = pg.mkQApp("Missile Interception Simulation")
 
         # Main window setup
         self.main_window = pg.QtWidgets.QWidget()
         self.main_window.setWindowTitle('Missile Interception - Live View')
 
-        self.view_elevation = 45.0
-        self.view_azimuth = -90.0
+        self.record = record
+        self.frames = []
+
+        self.view_elevation = 20.0
+        self.view_azimuth = 0.0
+        self.azimuth_rotation_rate = 0.5  # degrees per update cycle
 
         # Creating two windows, a "far" trajectory view and a "close" missile orientation view
         self.view_far = gl.GLViewWidget()
@@ -181,8 +187,31 @@ class SimulationVisualizer:
         self._sync_view_angles()
         self.app.processEvents()
 
+        if self.record:
+            # Capture the entire main window
+            qpixmap = self.main_window.grab()
+            if qpixmap.isNull():
+                return
+
+            # Fast QImage to PIL Image conversion using numpy memory mapping
+            qimage = qpixmap.toImage().convertToFormat(QtGui.QImage.Format.Format_RGBA8888)
+            ptr = qimage.bits()
+            
+            # For PyQt-based bindings, the void pointer needs its size set before conversion
+            if hasattr(ptr, 'setsize'):
+                ptr.setsize(qimage.height() * qimage.width() * 4)
+
+            arr = np.frombuffer(ptr, np.uint8).reshape((qimage.height(), qimage.width(), 4))
+            self.frames.append(Image.fromarray(arr, 'RGBA').convert('RGB'))
+
     def finalize(self):
         """Handles post-simulation window management."""
+        if self.record and self.frames:
+            gif_path = os.path.join('media', 'live_sim_visualization.gif')
+            print(f"Saving {len(self.frames)} frames to {gif_path}...")
+            self.frames[0].save(gif_path, save_all=True, append_images=self.frames[1:], duration=50, loop=0)
+            print(f"GIF saved as {gif_path}")
+
         if self.main_window.isVisible():
             print("Simulation finished. Close the window to continue.")
             self.app.exec()
@@ -318,16 +347,30 @@ class SimulationVisualizer:
     def _sync_view_angles(self):
         """Synchronizes view angles between the far and close view windows."""
 
-        # Setting view_close to match view_far
-        if self.view_far.opts['elevation'] != self.view_elevation or self.view_far.opts['azimuth'] != self.view_azimuth:
-            self.view_elevation = self.view_far.opts['elevation']
-            self.view_azimuth = self.view_far.opts['azimuth']
-            self.view_close.setCameraPosition(elevation=self.view_elevation, azimuth=self.view_azimuth)
-        # Setting view_far to match view_close
-        elif self.view_close.opts['elevation'] != self.view_elevation or self.view_close.opts['azimuth'] != self.view_azimuth:
-            self.view_elevation = self.view_close.opts['elevation']
-            self.view_azimuth = self.view_close.opts['azimuth']
+        # Increment azimuth at a constant rate if rotation is enabled
+        if self.record:
+            self.view_azimuth += self.azimuth_rotation_rate
+
+            # Wrap azimuth to keep it in [-180, 180] range
+            if self.view_azimuth > 180:
+                self.view_azimuth -= 360
+            elif self.view_azimuth < -180:
+                self.view_azimuth += 360
+
+            # Apply the rotating view to both windows
             self.view_far.setCameraPosition(elevation=self.view_elevation, azimuth=self.view_azimuth)
+            self.view_close.setCameraPosition(elevation=self.view_elevation, azimuth=self.view_azimuth)
+        else:
+            # Setting view_close to match view_far
+            if self.view_far.opts['elevation'] != self.view_elevation or self.view_far.opts['azimuth'] != self.view_azimuth:
+                self.view_elevation = self.view_far.opts['elevation']
+                self.view_azimuth = self.view_far.opts['azimuth']
+                self.view_close.setCameraPosition(elevation=self.view_elevation, azimuth=self.view_azimuth)
+            # Setting view_far to match view_close
+            elif self.view_close.opts['elevation'] != self.view_elevation or self.view_close.opts['azimuth'] != self.view_azimuth:
+                self.view_elevation = self.view_close.opts['elevation']
+                self.view_azimuth = self.view_close.opts['azimuth']
+                self.view_far.setCameraPosition(elevation=self.view_elevation, azimuth=self.view_azimuth)
 
     def _transform_fin(self, rotation_angle, base_transform, body_length, fin_radius, fin_scale_xy=0.5, fin_scale_z=0.4):
         """Creates fin transformation matrices."""

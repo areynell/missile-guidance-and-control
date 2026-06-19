@@ -10,16 +10,13 @@ Implements and simulates the guidance and control of a 6-DoF surface-to-air miss
 *   **Visualization:** Live 3D interception data is visualized using `pyqtgraph` in the main simulation loop.
 
 <p align="center">
-  <img src="media/missile_interception_animation.gif" alt="Missile Interception Animation" width="70%">
+  <img src="media/live_sim_visualization.gif" alt="Missile Interception Animation" width="70%">
 </p>
 
 <p align="center">
-  <img src="media/missile_interception_metrics.png" alt="Missile Interception Metrics" width="100%">
+  <img src="media/missile_interception_metrics.png" alt="Missile Interception Metrics" width="70%">
 </p>
 
-<p align="center">
-  <img src="media/missile_orientation_and_forces_animation.gif" alt="Missile Interception Orientation and Forces" width="70%">
-</p>
 
 ## Future Improvements
 1) Add changing moment arm to pitch and yaw due to changing CG from mass flow
@@ -27,5 +24,4 @@ Implements and simulates the guidance and control of a 6-DoF surface-to-air miss
 3) Make force and moment aerodynamic coefficients functions of Mach
 4) Add cross-coupling to force and moment aerodynamic coefficients
 5) Perform rigorous controller design
-
 6) Improve controller's integral anti-windup mechanism
