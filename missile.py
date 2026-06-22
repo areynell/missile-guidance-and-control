@@ -95,7 +95,20 @@ class Missile:
 
         self.guidance = missile_guidance
         self.controller = missile_controller
-        self.control_deltas = np.zeros(3, dtype=float) # [delta_a, delta_e, delta_r]
+        self.virtual_control_deltas = np.zeros(3, dtype=float) # [delta_a, delta_e, delta_r]
+        self.fin_deflections = np.zeros(4, dtype=float) # [delta_fin_1, delta_fin_2, delta_fin_3, delta_fin_4]
+        self.delta_limit = self.controller.delta_limit # rad, maximum allowable control surface deflection
+
+        # Mixing (M) and unmixing (M_pinv) matrices for X-configured fins
+        # Each fin is oriented at 45 degrees to the missile axes
+        sin45 = 1.0 / np.sqrt(2.0)
+        self.M = np.array([
+            [-1.0,  sin45, -sin45],
+            [-1.0,  sin45,  sin45],
+            [-1.0, -sin45,  sin45],
+            [-1.0, -sin45, -sin45]
+        ], dtype=float)
+        self.M_pinv = np.linalg.pinv(self.M)
 
         self.prev_rel_range = np.inf
 
@@ -154,7 +167,7 @@ class Missile:
         else:
             return np.array([0.0, 0.0, 0.0], dtype=float)
 
-    def compute_aerodynamic_forces(self, altitude: float, vb_missile: np.ndarray, vi_wind: np.ndarray, R_bi: np.ndarray, control_deltas: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    def compute_aerodynamic_forces(self, altitude: float, vb_missile: np.ndarray, vi_wind: np.ndarray, R_bi: np.ndarray, virtual_control_deltas: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """Calculates the aerodynamic forces acting on the missile in the wind frame, and then transforms them back to the body frame."""
 
         # All aerodynamic forces are computed w.r.t. the wind (relative velocity) frame, since this is what the missile "feels" aerodynamically
@@ -173,7 +186,7 @@ class Missile:
         P_dyn = 0.5 * rho * vb_rel_mag**2
 
         # Roll (aileron), pitch (elevator) and yaw (rudder) control surface deflections
-        delta_a, delta_e, delta_r = control_deltas
+        delta_a, delta_e, delta_r = virtual_control_deltas
 
         # Calculate aerodynamic force coefficients in the wind (relative velocity) frame
         alpha_total = np.arccos(np.cos(alpha) * np.cos(beta))
@@ -196,7 +209,7 @@ class Missile:
 
         return Fb_aero, Fw_aero
 
-    def compute_aerodynamic_moments(self, altitude: float, vb_missile: np.ndarray, vi_wind: np.ndarray, R_bi: np.ndarray, wb: np.ndarray, control_deltas: np.ndarray) -> np.ndarray:
+    def compute_aerodynamic_moments(self, altitude: float, vb_missile: np.ndarray, vi_wind: np.ndarray, R_bi: np.ndarray, wb: np.ndarray, virtual_control_deltas: np.ndarray) -> np.ndarray:
         """Calculates the aerodynamic moments acting on the missile in the body frame."""
 
         # Relative velocity in missile's body frame
@@ -218,7 +231,7 @@ class Missile:
         wx, wy, wz = wb
 
         # Roll (aileron), pitch (elevator) and yaw (rudder) control surface deflections
-        delta_a, delta_e, delta_r = control_deltas
+        delta_a, delta_e, delta_r = virtual_control_deltas
 
         # Calculate aerodynamic moment coefficients
         Cl = self.Cl_0 + (self.Cl_p * wx * self.D_ref / (2.0 * vb_rel_mag)) + (self.Cl_delta * delta_a)
@@ -268,7 +281,7 @@ class Missile:
         R_ib = utils.quaternion_to_rotation_matrix(q)
         R_bi = R_ib.T
 
-        Fb_aero, _ = self.compute_aerodynamic_forces(p[2], vb, self.vi_wind, R_bi, self.control_deltas)
+        Fb_aero, _ = self.compute_aerodynamic_forces(p[2], vb, self.vi_wind, R_bi, self.virtual_control_deltas)
 
         # Total specific force in body frame
         a_body = Fb_aero / m
@@ -307,7 +320,7 @@ class Missile:
         a_cmd_body = R_bi @ self.a_lat_desired
 
         # Compute missile's current lateral acceleration
-        Fb_aero, _ = self.compute_aerodynamic_forces(p[2], vb, self.vi_wind, R_bi, self.control_deltas)
+        Fb_aero, _ = self.compute_aerodynamic_forces(p[2], vb, self.vi_wind, R_bi, self.virtual_control_deltas)
         a_body = Fb_aero / m # Lateral acceleration experienced by the missile
 
         # Dynamic pressure
@@ -318,9 +331,40 @@ class Missile:
 
         # Skid-to-turn (STT) missiles typically command zero roll angle
         roll_cmd_rad = 0.0
-        # NOTE: We're using CL and CY in the wind frame, but should actually be using CN and CY in the body frame. This appoximation only works for low alpha and beta angles
+        # NOTE: For feedforward control, we're using CL and CY in the wind frame, but should actually be using CN and CY in the body frame. This appoximation only works for low alpha and beta angles
         # TODO: Think about using a struct/dataclass to pass arguments more cleanly and safely into update() function
-        self.control_deltas = self.controller.update(roll_cmd_rad, a_cmd_body, a_body, wb, q, P_dyn, self.mass(), self.A_ref, self.CL_delta, self.CL_alpha, self.Cm_delta, self.Cm_alpha, self.CY_delta, self.CY_beta, self.Cn_delta, self.Cn_beta, dt)
+        virtual_control_deltas = self.controller.update(roll_cmd_rad, a_cmd_body, a_body, wb, q, P_dyn, self.mass(), self.A_ref, self.CL_delta, self.CL_alpha, self.Cm_delta, self.Cm_alpha, self.CY_delta, self.CY_beta, self.Cn_delta, self.Cn_beta, dt)
+        self.virtual_control_deltas, self.fin_deflections = self.apply_control_mixing_and_limits(virtual_control_deltas)
+
+    def apply_control_mixing_and_limits(self, virtual_control_deltas: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """
+        1) Maps virtual controls to physical fin deflections
+        2) Applies proportional position limiting to prevent cross-coupling
+        3) Maps limited fin deflections back to saturated virtual controls for use in force and moment calculations.
+        """
+
+        # Map virtual control deltas (delta_a, delta_e, delta_r) to individual fin control deltas (delta_fin_1, delta_fin_2, delta_fin_3, delta_fin_4)
+        fin_control_deltas = self.M @ virtual_control_deltas
+
+        # Apply proportional scaling to enforce actuator limits without introducing cross-coupling.
+        #
+        # Naive clipping (np.clip) is avoided here because clipping the largest fin independently causes
+        # the others to remain unchanged, which distorts the original mix and introduces spurious moments
+        # in unintended axes after saturation.
+        #
+        # Proportional scaling preserves the relative ratios of all fin deflections by finding the
+        # most-deflected fin and scaling the entire fin deflection vector down uniformly so that the
+        # largest fin just reaches the limit. This maintains the correct direction of the commanded
+        # moment vector even under saturation.
+        max_deflection = np.max(np.abs(fin_control_deltas))
+        if max_deflection > self.delta_limit:
+            scaling_factor = self.delta_limit / max_deflection
+            fin_control_deltas = scaling_factor * fin_control_deltas
+
+        # Map saturated fin control deltas (delta_fin_1_sat, delta_fin_2_sat, delta_fin_3_sat, delta_fin_4_sat) back to saturated virtual control deltas
+        virtual_control_deltas = self.M_pinv @ fin_control_deltas
+
+        return virtual_control_deltas, fin_control_deltas
 
     def dynamics(self, missile_state: np.ndarray) -> np.ndarray:
         """6-DOF missile dynamics based on Newton-Euler equations for a rigid body, with forces and moments from gravity, thrust, and aerodynamics."""
@@ -351,13 +395,13 @@ class Missile:
         Fb_thrust = self.thrust(m)
 
         # Aerodynamic forces (drag, sideslip, lift) transformed from wind frame to body frame
-        Fb_aero, _ = self.compute_aerodynamic_forces(p[2], vb, self.vi_wind, R_bi, self.control_deltas)
+        Fb_aero, _ = self.compute_aerodynamic_forces(p[2], vb, self.vi_wind, R_bi, self.virtual_control_deltas)
 
         # Total force in missile's body frame
         Fb_total = Fb_grav + Fb_thrust + Fb_aero
 
         # Aerodynamic moments (roll, pitch, yaw) in body frame
-        Mb_aero = self.compute_aerodynamic_moments(p[2], vb, self.vi_wind, R_bi, wb, self.control_deltas)
+        Mb_aero = self.compute_aerodynamic_moments(p[2], vb, self.vi_wind, R_bi, wb, self.virtual_control_deltas)
 
         # Total moment/torque in missile's body frame
         Mb_total = Mb_aero

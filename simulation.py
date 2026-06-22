@@ -12,7 +12,7 @@ def log_data(missile_log: dict, target_log: dict, missile: Missile, target: Targ
     R_bi = R_ib.T
     alpha = missile.alpha(missile.velocity(), missile.vi_wind, R_bi)
     beta = missile.beta(missile.velocity(), missile.vi_wind, R_bi)
-    Fb_aero, Fw_aero = missile.compute_aerodynamic_forces(missile.position()[2], missile.velocity(), missile.vi_wind, R_bi, missile.control_deltas)
+    Fb_aero, Fw_aero = missile.compute_aerodynamic_forces(missile.position()[2], missile.velocity(), missile.vi_wind, R_bi, missile.virtual_control_deltas)
     rho = utils.compute_air_density(missile.position()[2], missile.rho0, missile.H_scale)
     vb_rel = missile.velocity() - R_bi @ missile.vi_wind
     vb_rel_mag = np.linalg.norm(vb_rel)
@@ -31,7 +31,8 @@ def log_data(missile_log: dict, target_log: dict, missile: Missile, target: Targ
     missile_log["thrust"].append(missile.thrust(missile.mass()))
     missile_log["alpha"].append(alpha)
     missile_log["beta"].append(beta)
-    missile_log["control_deltas"].append(missile.control_deltas)
+    missile_log["virtual_control_deltas"].append(missile.virtual_control_deltas)
+    missile_log["fin_deflections"].append(missile.fin_deflections.copy())
     missile_log["Fb_aero"].append(Fb_aero)
     missile_log["Fw_aero"].append(Fw_aero)
     missile_log["dynamic_pressure"].append(P_dyn)
@@ -114,7 +115,8 @@ def run_simulation(missile: Missile, target: Target, range_close:float, dt_far: 
         "thrust": [],
         "alpha": [],
         "beta": [],
-        "control_deltas": [],
+        "virtual_control_deltas": [],
+        "fin_deflections": [],
         "Fb_aero": [],
         "Fw_aero": [],
         "dynamic_pressure": []

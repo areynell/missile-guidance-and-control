@@ -107,7 +107,7 @@ class SimulationVisualizer:
         beta = missile.beta(missile.velocity(), missile.vi_wind, R_bi)
         R_iw = R_ib @ utils.wind_to_body_rotation_matrix(alpha, beta)
 
-        _, Fw_aero = missile.compute_aerodynamic_forces(missile_position[2], missile_velocity, missile.vi_wind, R_bi, missile.control_deltas)
+        _, Fw_aero = missile.compute_aerodynamic_forces(missile_position[2], missile_velocity, missile.vi_wind, R_bi, missile.virtual_control_deltas)
         a_lat_desired = missile.desired_lateral_accel()
         a_lat_achieved = missile.achieved_lateral_accel()
 
@@ -168,7 +168,8 @@ class SimulationVisualizer:
 
             # Update missile fins
             for fin_idx, angle_deg in enumerate(fin_angles):
-                missile_fin_transform = self._transform_fin(angle_deg, missile_base_transform, missile.L, missile.D_ref/2)
+                deflection_deg = np.rad2deg(missile.fin_deflections[fin_idx])
+                missile_fin_transform = self._transform_fin(angle_deg, missile_base_transform, missile.L, missile.D_ref/2, deflection_deg=deflection_deg)
                 view_items[f"missile_fin{fin_idx+1}"].setTransform(missile_fin_transform)
 
             # Update target body and nose
@@ -196,7 +197,7 @@ class SimulationVisualizer:
             # Fast QImage to PIL Image conversion using numpy memory mapping
             qimage = qpixmap.toImage().convertToFormat(QtGui.QImage.Format.Format_RGBA8888)
             ptr = qimage.bits()
-            
+
             # For PyQt-based bindings, the void pointer needs its size set before conversion
             if hasattr(ptr, 'setsize'):
                 ptr.setsize(qimage.height() * qimage.width() * 4)
@@ -372,12 +373,13 @@ class SimulationVisualizer:
                 self.view_azimuth = self.view_close.opts['azimuth']
                 self.view_far.setCameraPosition(elevation=self.view_elevation, azimuth=self.view_azimuth)
 
-    def _transform_fin(self, rotation_angle, base_transform, body_length, fin_radius, fin_scale_xy=0.5, fin_scale_z=0.4):
+    def _transform_fin(self, rotation_angle, base_transform, body_length, fin_radius, fin_scale_xy=0.5, fin_scale_z=0.4, deflection_deg=0.0):
         """Creates fin transformation matrices."""
 
         fin_transform = QtGui.QMatrix4x4(base_transform)
         fin_transform.rotate(rotation_angle, 1, 0, 0)
         fin_transform.translate(-body_length/2 + fin_scale_xy/2.0, 0, fin_radius + fin_scale_z/2)
+        fin_transform.rotate(deflection_deg, 0, 0, 1)
         fin_transform.scale(fin_scale_xy, 0.03, fin_scale_z)
         return fin_transform
 
@@ -484,13 +486,18 @@ def plot_metrics(missile_log, target_log):
 
     # Missile control surface deflections vs. time
     ax = axes[3, 0]
-    ax.plot(missile_log["time"], np.degrees(missile_log["control_deltas"][:, 0]), label='Aileron')
-    ax.plot(missile_log["time"], np.degrees(missile_log["control_deltas"][:, 1]), label='Elevator')
-    ax.plot(missile_log["time"], np.degrees(missile_log["control_deltas"][:, 2]), label='Rudder')
+    ax.plot(missile_log["time"], np.degrees(missile_log["virtual_control_deltas"][:, 0]), label='Aileron (Virtual)', linestyle='--')
+    ax.plot(missile_log["time"], np.degrees(missile_log["virtual_control_deltas"][:, 1]), label='Elevator (Virtual)', linestyle='--')
+    ax.plot(missile_log["time"], np.degrees(missile_log["virtual_control_deltas"][:, 2]), label='Rudder (Virtual)', linestyle='--')
+    ax.plot(missile_log["time"], np.degrees(missile_log["fin_deflections"][:, 0]), label='Fin 1')
+    ax.plot(missile_log["time"], np.degrees(missile_log["fin_deflections"][:, 1]), label='Fin 2')
+    ax.plot(missile_log["time"], np.degrees(missile_log["fin_deflections"][:, 2]), label='Fin 3')
+    ax.plot(missile_log["time"], np.degrees(missile_log["fin_deflections"][:, 3]), label='Fin 4')
+
     ax.set_xlabel('Time (s)')
     ax.set_ylabel('Control Deflection (deg)')
     ax.grid()
-    ax.legend()
+    ax.legend(loc='lower center', fontsize='small')
 
     # Missile thrust vs. time
     ax = axes[3, 1]
