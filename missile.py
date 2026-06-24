@@ -112,60 +112,98 @@ class Missile:
 
         self.prev_rel_range = np.inf
 
-    def position(self) -> np.ndarray:
-        """Returns the missile's position vector in the inertial frame."""
-        return self.state[MissileState.X:MissileState.Z+1]
+    def update_guidance(self, target: Target) -> np.ndarray:
+        """Updates the missile's desired lateral acceleration based on the guidance law."""
 
-    def orientation(self) -> np.ndarray:
-        """Returns the missile's orientation as a quaternion (qw, qx, qy, qz) representing the rotation from the body frame to the inertial frame."""
-        return self.state[MissileState.QW:MissileState.QZ+1]
+        vb = self.velocity()
+        q = self.orientation()
+        R_ib = utils.quaternion_to_rotation_matrix(q)  # Body to inertial frame rotation matrix
+        vi = R_ib @ vb # Velocity in inertial frame
 
-    def velocity(self) -> np.ndarray:
-        """Returns the missile's velocity vector in the body frame."""
-        return self.state[MissileState.VX:MissileState.VZ+1]
+        # TODO: Does PN guidance need to take inertial wind velocity into account?
 
-    def angular_velocity(self) -> np.ndarray:
-        """Returns the missile's angular velocity vector in the body frame."""
-        return self.state[MissileState.WX:MissileState.WZ+1]
+        self.a_lat_desired = self.guidance.compute_guidance(self.position(), vi, target.position(), target.velocity())
+        self.update_flight_phase()
 
-    def speed(self) -> float:
-        """Returns the missile's speed (velocity magnitude)."""
-        return np.linalg.norm(self.velocity())
+    def update_control(self, dt: float):
+        """Updates the missile's control surface deflections based on the control law to achieve the desired lateral acceleration from the guidance law."""
 
-    def mass(self) -> float:
-        """Returns the missile's mass."""
-        return self.state[MissileState.M]
+        p = self.position()
+        vb = self.velocity()
+        q = self.orientation()
+        wb = self.angular_velocity()
+        m = self.mass()
 
-    def alpha(self, vb_missile: np.ndarray, vi_wind: np.ndarray, R_bi: np.ndarray) -> float:
-        """Calculates the missile's angle of attack based on the its velocity vector in the body frame and the wind velocity in the inertial frame."""
-        vb_rel = vb_missile - R_bi @ vi_wind
-        return np.arctan2(vb_rel[2], vb_rel[0])
+        R_ib = utils.quaternion_to_rotation_matrix(q) # Body to inertial frame rotation matrix
+        R_bi = R_ib.T
 
-    def beta(self, vb_missile: np.ndarray, vi_wind: np.ndarray, R_bi: np.ndarray) -> float:
-        """Calculates the missile's sideslip angle based on the its velocity vector in the body frame and the wind velocity in the inertial frame."""
-        vb_rel = vb_missile - R_bi @ vi_wind
+        a_cmd_body = R_bi @ self.a_lat_desired
+
+        # Compute missile's current lateral acceleration
+        Fb_aero, _ = self.compute_aerodynamic_forces(p[2], vb, self.vi_wind, R_bi, self.virtual_control_deltas)
+        a_body = Fb_aero / m # Lateral acceleration experienced by the missile
+
+        # Dynamic pressure
+        vb_rel = vb - R_bi @ self.vi_wind
         vb_rel_mag = np.linalg.norm(vb_rel)
-        if vb_rel_mag < self.v_min_aero:
-            return 0.0 # Prevent divide-by-zero at launch
-        return np.arcsin(np.clip(vb_rel[1] / vb_rel_mag, -1.0, 1.0))
+        rho = utils.compute_air_density(p[2], self.rho0, self.H_scale)
+        P_dyn = 0.5 * rho * vb_rel_mag**2
 
-    def update_flight_phase(self):
-        """Updates the missile's current flight phase (boost or coast) based on its mass relative to the dry mass after burnout."""
-        if self.mass() > self.m_dry:
-            self.flight_phase = "Boost"
-        else:
-            self.flight_phase = "Coast"
+        # Skid-to-turn (STT) missiles typically command zero roll angle
+        roll_cmd_rad = 0.0
+        # NOTE: For feedforward control, we're using CL and CY in the wind frame, but should actually be using CN and CY in the body frame. This appoximation only works for low alpha and beta angles
+        # TODO: Think about using a struct/dataclass to pass arguments more cleanly and safely into update() function
+        virtual_control_deltas = self.controller.update(roll_cmd_rad, a_cmd_body, a_body, wb, q, P_dyn, self.mass(), self.A_ref, self.CL_delta, self.CL_alpha, self.Cm_delta, self.Cm_alpha, self.CY_delta, self.CY_beta, self.Cn_delta, self.Cn_beta, dt)
+        self.virtual_control_deltas, self.fin_deflections = self.apply_control_mixing_and_limits(virtual_control_deltas)
 
-    def current_flight_phase(self) -> str:
-        """Returns the current flight phase of the missile (boost or coast)."""
-        return self.flight_phase
+    def dynamics(self, missile_state: np.ndarray) -> np.ndarray:
+        """6-DOF missile dynamics based on Newton-Euler equations for a rigid body, with forces and moments from gravity, thrust, and aerodynamics."""
 
-    def thrust(self, mass: float) -> np.ndarray:
-        """Returns the thrust vector along the missile's longitudinal axis."""
-        if mass > self.m_dry:
-            return np.array([self.T, 0.0, 0.0], dtype=float)
-        else:
-            return np.array([0.0, 0.0, 0.0], dtype=float)
+        p = missile_state[MissileState.X:MissileState.Z+1]
+        q = missile_state[MissileState.QW:MissileState.QZ+1]
+        vb = missile_state[MissileState.VX:MissileState.VZ+1]
+        wb = missile_state[MissileState.WX:MissileState.WZ+1]
+        m = missile_state[MissileState.M]
+
+        # Inertia matrix for a solid cylinder (missile body) about its center of mass, aligned with the body axes
+        I = np.diag(np.array([
+            0.5 * m * (self.D_ref / 2.0)**2,
+            1.0/12.0 * m * (3.0 * (self.D_ref / 2.0)**2 + self.L**2),
+            1.0/12.0 * m * (3.0 * (self.D_ref / 2.0)**2 + self.L**2)
+        ], dtype=float))
+        I_inv = np.linalg.inv(I)
+
+        q = utils.quaternion_normalization(q)
+        R_ib = utils.quaternion_to_rotation_matrix(q)  # Body to inertial
+        R_bi = R_ib.T # Inertial to body
+
+        # Constant gravity in missile's body frame
+        Fi_grav = np.array([0.0, 0.0, -m*self.g0], dtype=float)
+        Fb_grav = R_bi @ Fi_grav
+
+        # Thrust force along missile's longitudinal body axis
+        Fb_thrust = self.thrust(m)
+
+        # Aerodynamic forces (drag, sideslip, lift) transformed from wind frame to body frame
+        Fb_aero, _ = self.compute_aerodynamic_forces(p[2], vb, self.vi_wind, R_bi, self.virtual_control_deltas)
+
+        # Total force in missile's body frame
+        Fb_total = Fb_grav + Fb_thrust + Fb_aero
+
+        # Aerodynamic moments (roll, pitch, yaw) in body frame
+        Mb_aero = self.compute_aerodynamic_moments(p[2], vb, self.vi_wind, R_bi, wb, self.virtual_control_deltas)
+
+        # Total moment/torque in missile's body frame
+        Mb_total = Mb_aero
+
+        # State derivatives based on Newton-Euler equations for a rigid body
+        dpdt = R_ib @ vb
+        dqdt = 0.5 * utils.quaternion_multiply(q, np.hstack((0.0, wb)))
+        dvbdt = Fb_total / m - np.cross(wb, vb)
+        dwbdt = I_inv @ (Mb_total - np.cross(wb, I @ wb))
+        dmdt = -Fb_thrust[0] / (self.Isp * self.g0)
+
+        return np.hstack((dpdt, dqdt, dvbdt, dwbdt, dmdt))
 
     def compute_aerodynamic_forces(self, altitude: float, vb_missile: np.ndarray, vi_wind: np.ndarray, R_bi: np.ndarray, virtual_control_deltas: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """Calculates the aerodynamic forces acting on the missile in the wind frame, and then transforms them back to the body frame."""
@@ -247,6 +285,36 @@ class Missile:
 
         return np.array([Mx, My, Mz], dtype=float)
 
+    def apply_control_mixing_and_limits(self, virtual_control_deltas: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """
+        1) Maps virtual controls to physical fin deflections
+        2) Applies proportional position limiting to prevent cross-coupling
+        3) Maps limited fin deflections back to saturated virtual controls for use in force and moment calculations.
+        """
+
+        # Map virtual control deltas (delta_a, delta_e, delta_r) to individual fin control deltas (delta_fin_1, delta_fin_2, delta_fin_3, delta_fin_4)
+        fin_control_deltas = self.M @ virtual_control_deltas
+
+        # Apply proportional scaling to enforce actuator limits without introducing cross-coupling.
+        #
+        # Naive clipping (np.clip) is avoided here because clipping the largest fin independently causes
+        # the others to remain unchanged, which distorts the original mix and introduces spurious moments
+        # in unintended axes after saturation.
+        #
+        # Proportional scaling preserves the relative ratios of all fin deflections by finding the
+        # most-deflected fin and scaling the entire fin deflection vector down uniformly so that the
+        # largest fin just reaches the limit. This maintains the correct direction of the commanded
+        # moment vector even under saturation.
+        max_deflection = np.max(np.abs(fin_control_deltas))
+        if max_deflection > self.delta_limit:
+            scaling_factor = self.delta_limit / max_deflection
+            fin_control_deltas = scaling_factor * fin_control_deltas
+
+        # Map saturated fin control deltas (delta_fin_1_sat, delta_fin_2_sat, delta_fin_3_sat, delta_fin_4_sat) back to saturated virtual control deltas
+        virtual_control_deltas = self.M_pinv @ fin_control_deltas
+
+        return virtual_control_deltas, fin_control_deltas
+
     def detonate_warhead(self, target_pos: np.ndarray) -> bool:
         """
         Checks if the missile's warhead should detonate based on reaching the point of closest approach
@@ -292,125 +360,65 @@ class Missile:
         # Rotate lateral acceleration to inertial frame for comparison with desired lateral acceleration from guidance law
         return R_ib @ a_lat_body
 
-    def update_guidance(self, target: Target) -> np.ndarray:
-        """Updates the missile's desired lateral acceleration based on the guidance law."""
+    def alpha(self, vb_missile: np.ndarray, vi_wind: np.ndarray, R_bi: np.ndarray) -> float:
+        """Calculates the missile's angle of attack based on the its velocity vector in the body frame and the wind velocity in the inertial frame."""
+        vb_rel = vb_missile - R_bi @ vi_wind
+        return np.arctan2(vb_rel[2], vb_rel[0])
 
-        vb = self.velocity()
-        q = self.orientation()
-        R_ib = utils.quaternion_to_rotation_matrix(q)  # Body to inertial frame rotation matrix
-        vi = R_ib @ vb # Velocity in inertial frame
-
-        # TODO: Does PN guidance need to take inertial wind velocity into account?
-
-        self.a_lat_desired = self.guidance.compute_guidance(self.position(), vi, target.position(), target.velocity())
-        self.update_flight_phase()
-
-    def update_control(self, dt: float):
-        """Updates the missile's control surface deflections based on the control law to achieve the desired lateral acceleration from the guidance law."""
-
-        p = self.position()
-        vb = self.velocity()
-        q = self.orientation()
-        wb = self.angular_velocity()
-        m = self.mass()
-
-        R_ib = utils.quaternion_to_rotation_matrix(q) # Body to inertial frame rotation matrix
-        R_bi = R_ib.T
-
-        a_cmd_body = R_bi @ self.a_lat_desired
-
-        # Compute missile's current lateral acceleration
-        Fb_aero, _ = self.compute_aerodynamic_forces(p[2], vb, self.vi_wind, R_bi, self.virtual_control_deltas)
-        a_body = Fb_aero / m # Lateral acceleration experienced by the missile
-
-        # Dynamic pressure
-        vb_rel = vb - R_bi @ self.vi_wind
+    def beta(self, vb_missile: np.ndarray, vi_wind: np.ndarray, R_bi: np.ndarray) -> float:
+        """Calculates the missile's sideslip angle based on the its velocity vector in the body frame and the wind velocity in the inertial frame."""
+        vb_rel = vb_missile - R_bi @ vi_wind
         vb_rel_mag = np.linalg.norm(vb_rel)
-        rho = utils.compute_air_density(p[2], self.rho0, self.H_scale)
-        P_dyn = 0.5 * rho * vb_rel_mag**2
+        if vb_rel_mag < self.v_min_aero:
+            return 0.0 # Prevent divide-by-zero at launch
+        return np.arcsin(np.clip(vb_rel[1] / vb_rel_mag, -1.0, 1.0))
 
-        # Skid-to-turn (STT) missiles typically command zero roll angle
-        roll_cmd_rad = 0.0
-        # NOTE: For feedforward control, we're using CL and CY in the wind frame, but should actually be using CN and CY in the body frame. This appoximation only works for low alpha and beta angles
-        # TODO: Think about using a struct/dataclass to pass arguments more cleanly and safely into update() function
-        virtual_control_deltas = self.controller.update(roll_cmd_rad, a_cmd_body, a_body, wb, q, P_dyn, self.mass(), self.A_ref, self.CL_delta, self.CL_alpha, self.Cm_delta, self.Cm_alpha, self.CY_delta, self.CY_beta, self.Cn_delta, self.Cn_beta, dt)
-        self.virtual_control_deltas, self.fin_deflections = self.apply_control_mixing_and_limits(virtual_control_deltas)
+    def position(self) -> np.ndarray:
+        """Returns the missile's position vector in the inertial frame."""
+        return self.state[MissileState.X:MissileState.Z+1]
 
-    def apply_control_mixing_and_limits(self, virtual_control_deltas: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        """
-        1) Maps virtual controls to physical fin deflections
-        2) Applies proportional position limiting to prevent cross-coupling
-        3) Maps limited fin deflections back to saturated virtual controls for use in force and moment calculations.
-        """
+    def orientation(self) -> np.ndarray:
+        """Returns the missile's orientation as a quaternion (qw, qx, qy, qz) representing the rotation from the body frame to the inertial frame."""
+        return self.state[MissileState.QW:MissileState.QZ+1]
 
-        # Map virtual control deltas (delta_a, delta_e, delta_r) to individual fin control deltas (delta_fin_1, delta_fin_2, delta_fin_3, delta_fin_4)
-        fin_control_deltas = self.M @ virtual_control_deltas
+    def velocity(self) -> np.ndarray:
+        """Returns the missile's velocity vector in the body frame."""
+        return self.state[MissileState.VX:MissileState.VZ+1]
 
-        # Apply proportional scaling to enforce actuator limits without introducing cross-coupling.
-        #
-        # Naive clipping (np.clip) is avoided here because clipping the largest fin independently causes
-        # the others to remain unchanged, which distorts the original mix and introduces spurious moments
-        # in unintended axes after saturation.
-        #
-        # Proportional scaling preserves the relative ratios of all fin deflections by finding the
-        # most-deflected fin and scaling the entire fin deflection vector down uniformly so that the
-        # largest fin just reaches the limit. This maintains the correct direction of the commanded
-        # moment vector even under saturation.
-        max_deflection = np.max(np.abs(fin_control_deltas))
-        if max_deflection > self.delta_limit:
-            scaling_factor = self.delta_limit / max_deflection
-            fin_control_deltas = scaling_factor * fin_control_deltas
+    def angular_velocity(self) -> np.ndarray:
+        """Returns the missile's angular velocity vector in the body frame."""
+        return self.state[MissileState.WX:MissileState.WZ+1]
 
-        # Map saturated fin control deltas (delta_fin_1_sat, delta_fin_2_sat, delta_fin_3_sat, delta_fin_4_sat) back to saturated virtual control deltas
-        virtual_control_deltas = self.M_pinv @ fin_control_deltas
+    def speed(self) -> float:
+        """Returns the missile's speed (velocity magnitude)."""
+        return np.linalg.norm(self.velocity())
 
-        return virtual_control_deltas, fin_control_deltas
+    def mass(self) -> float:
+        """Returns the missile's mass."""
+        return self.state[MissileState.M]
 
-    def dynamics(self, missile_state: np.ndarray) -> np.ndarray:
-        """6-DOF missile dynamics based on Newton-Euler equations for a rigid body, with forces and moments from gravity, thrust, and aerodynamics."""
+    def update_flight_phase(self):
+        """Updates the missile's current flight phase (boost or coast) based on its mass relative to the dry mass after burnout."""
+        if self.mass() > self.m_dry:
+            self.flight_phase = "Boost"
+        else:
+            self.flight_phase = "Coast"
 
-        p = missile_state[MissileState.X:MissileState.Z+1]
-        q = missile_state[MissileState.QW:MissileState.QZ+1]
-        vb = missile_state[MissileState.VX:MissileState.VZ+1]
-        wb = missile_state[MissileState.WX:MissileState.WZ+1]
-        m = missile_state[MissileState.M]
+    def current_flight_phase(self) -> str:
+        """Returns the current flight phase of the missile (boost or coast)."""
+        return self.flight_phase
 
-        # Inertia matrix for a solid cylinder (missile body) about its center of mass, aligned with the body axes
-        I = np.diag(np.array([
-            0.5 * m * (self.D_ref / 2.0)**2,
-            1.0/12.0 * m * (3.0 * (self.D_ref / 2.0)**2 + self.L**2),
-            1.0/12.0 * m * (3.0 * (self.D_ref / 2.0)**2 + self.L**2)
-        ], dtype=float))
-        I_inv = np.linalg.inv(I)
+    def thrust(self, mass: float) -> np.ndarray:
+        """Returns the thrust vector along the missile's longitudinal axis."""
+        if mass > self.m_dry:
+            return np.array([self.T, 0.0, 0.0], dtype=float)
+        else:
+            return np.array([0.0, 0.0, 0.0], dtype=float)
 
-        q = utils.quaternion_normalization(q)
-        R_ib = utils.quaternion_to_rotation_matrix(q)  # Body to inertial
-        R_bi = R_ib.T # Inertial to body
+    def virtual_control_delta(self) -> np.ndarray:
+        """Returns the virtual control delta vector for the missile."""
+        return self.virtual_control_deltas
 
-        # Constant gravity in missile's body frame
-        Fi_grav = np.array([0.0, 0.0, -m*self.g0], dtype=float)
-        Fb_grav = R_bi @ Fi_grav
-
-        # Thrust force along missile's longitudinal body axis
-        Fb_thrust = self.thrust(m)
-
-        # Aerodynamic forces (drag, sideslip, lift) transformed from wind frame to body frame
-        Fb_aero, _ = self.compute_aerodynamic_forces(p[2], vb, self.vi_wind, R_bi, self.virtual_control_deltas)
-
-        # Total force in missile's body frame
-        Fb_total = Fb_grav + Fb_thrust + Fb_aero
-
-        # Aerodynamic moments (roll, pitch, yaw) in body frame
-        Mb_aero = self.compute_aerodynamic_moments(p[2], vb, self.vi_wind, R_bi, wb, self.virtual_control_deltas)
-
-        # Total moment/torque in missile's body frame
-        Mb_total = Mb_aero
-
-        # State derivatives based on Newton-Euler equations for a rigid body
-        dpdt = R_ib @ vb
-        dqdt = 0.5 * utils.quaternion_multiply(q, np.hstack((0.0, wb)))
-        dvbdt = Fb_total / m - np.cross(wb, vb)
-        dwbdt = I_inv @ (Mb_total - np.cross(wb, I @ wb))
-        dmdt = -Fb_thrust[0] / (self.Isp * self.g0)
-
-        return np.hstack((dpdt, dqdt, dvbdt, dwbdt, dmdt))
+    def fin_deflections(self) -> np.ndarray:
+        """Returns the fin deflection angles for the missile."""
+        return self.fin_deflections
