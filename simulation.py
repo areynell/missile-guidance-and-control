@@ -144,8 +144,7 @@ def run_simulation(missile: Missile, target: Target, range_close:float, dt_far: 
         else:
             dt = dt_far
 
-        missile.update_guidance(target)
-        missile.update_control(dt)
+        missile.update(target, dt)
 
         log_data(missile_log, target_log, missile, target, t)
 

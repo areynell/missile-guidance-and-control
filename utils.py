@@ -63,6 +63,10 @@ def quaternion_to_yaw(q):
     qw, qx, qy, qz = q
     return np.arctan2(2.0*(qw*qz + qx*qy), 1.0 - 2.0*(qy**2 + qz**2))
 
+def wrap_to_pi(angle):
+    """Wraps angle (radians) to the range [-pi, pi]."""
+    return (angle + np.pi) % (2.0 * np.pi) - np.pi
+
 def vector_to_skew_symmetric_matrix(v):
     """Converts a 3-element vector into a 3x3 skew-symmetric matrix."""
     return np.array([

@@ -1,6 +1,8 @@
+from numpy import roll
 import numpy as np
 
 from parameters import AerodynamicParams, MissileParams, PropulsionParams, StructuralParams, AtmosphericParams, WarheadParams, ControllerParams, GuidanceParams
+import utils
 from missile import MissileState, Missile
 from guidance import MissileGuidance
 from controller import MissileController
@@ -13,26 +15,37 @@ def initialize_missile() -> Missile:
 
     missile_params = MissileParams(
         aero = AerodynamicParams(
+            # Drag coefficients
             CD_0 = 0.1,
             CD_alpha = 5.0,
             CD_delta = 1.0,
+
+            # Side force coefficients
             CY_0 = 0.0,
             CY_beta = -20.0,
             CY_delta = 2.0,
+
+            # Lift coefficients
             CL_0 = 0.0,
             CL_alpha = 20.0,
             CL_delta = 2.0,
+
+            # Roll moment coefficients
             Cl_0 = 0.0,
             Cl_p = -2.0,
             Cl_delta = 0.5,
+    
+            # Pitch moment coefficients
             Cm_0 = 0.0,
             Cm_alpha = -2.0,
             Cm_q = -2.0,
-            Cm_delta = 2.0,
+            Cm_delta = -2.0,
+
+            # Yaw moment coefficients
             Cn_0 = 0.0,
             Cn_beta = 2.0,
             Cn_r = -2.0,
-            Cn_delta = 2.0
+            Cn_delta = -2.0
         ),
         propulsion = PropulsionParams(
             thrust = 150.0e3,
@@ -93,19 +106,22 @@ def initialize_missile() -> Missile:
 
     missile_controller = MissileController(controller_params)
 
-    # Initial pitch of 45 degrees
+    # Initial missile orientation
     initial_pitch = -np.deg2rad(45.0)
-    qw_init = np.cos(initial_pitch / 2.0)
-    qy_init = np.sin(initial_pitch / 2.0)
+    initial_roll = np.pi
+    q_pitch = np.array([np.cos(initial_pitch / 2), 0.0, np.sin(initial_pitch / 2), 0.0])
+    q_roll = np.array([np.cos(initial_roll / 2), np.sin(initial_roll / 2), 0.0, 0.0])
+    q = utils.quaternion_multiply(q_pitch, q_roll)
+    q = utils.quaternion_normalization(q)
 
     initial_state = np.empty(len(MissileState), dtype=float)
     initial_state[MissileState.X] = 0.0
     initial_state[MissileState.Y] = 0.0
     initial_state[MissileState.Z] = 0.0
-    initial_state[MissileState.QW] = qw_init
-    initial_state[MissileState.QX] = 0.0
-    initial_state[MissileState.QY] = qy_init
-    initial_state[MissileState.QZ] = 0.0
+    initial_state[MissileState.QW] = q[0]
+    initial_state[MissileState.QX] = q[1]
+    initial_state[MissileState.QY] = q[2]
+    initial_state[MissileState.QZ] = q[3]
     initial_state[MissileState.VX] = 0.0
     initial_state[MissileState.VY] = 0.0
     initial_state[MissileState.VZ] = 0.0

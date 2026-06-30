@@ -187,7 +187,8 @@ class MissileController:
         """
 
         # Outer Loop Error: Scale roll angle error to generate a targeted body roll rate command (rad/s)
-        roll_rate_cmd = self.Kp_roll * (roll_cmd - roll)
+        roll_error = utils.wrap_to_pi(roll_cmd - roll)
+        roll_rate_cmd = self.Kp_roll * roll_error
 
         # Inner Loop Error: Compute deviation between requested roll rate and actual gyro measurement
         roll_rate_error = roll_rate_cmd - wx
@@ -233,8 +234,8 @@ class MissileController:
         self.int_pitch_rate_error += self.Ki_pitch_rate * pitch_rate_error * dt
         self.int_pitch_rate_error = np.clip(self.int_pitch_rate_error, -self.integral_limit, self.integral_limit) # Integral anti-windup clamp
 
-        # Output: Compute control deflection for pitch based on difference between integrated pitch rate error and current pitch rate
-        delta_pitch = self.Kr_pitch_rate * (self.int_pitch_rate_error - wy)
+        # Output: Compute control deflection for pitch based on difference between current pitch rate and integrated pitch rate error
+        delta_pitch = self.Kr_pitch_rate * (wy - self.int_pitch_rate_error)
 
         return delta_pitch
 
@@ -269,7 +270,7 @@ class MissileController:
         self.int_yaw_rate_error += self.Ki_yaw_rate * yaw_rate_error * dt
         self.int_yaw_rate_error = np.clip(self.int_yaw_rate_error, -self.integral_limit, self.integral_limit) # Integral anti-windup clamp
 
-        # Output: Compute control deflection for yaw based on difference between integrated yaw rate error and current yaw rate
-        delta_yaw = self.Kr_yaw_rate * (self.int_yaw_rate_error - wz)
+        # Output: Compute control deflection for yaw based on difference between current yaw rate and integrated yaw rate error
+        delta_yaw = self.Kr_yaw_rate * (wz - self.int_yaw_rate_error)
 
         return delta_yaw

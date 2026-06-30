@@ -99,18 +99,28 @@ class Missile:
         self.fin_deflections = np.zeros(4, dtype=float) # [delta_fin_1, delta_fin_2, delta_fin_3, delta_fin_4]
         self.delta_limit = self.controller.delta_limit # rad, maximum allowable control surface deflection
 
+        # Store initial roll angle for controller to track during flight
+        initial_q = initial_state[MissileState.QW:MissileState.QZ+1]
+        self.initial_roll_rad = utils.quaternion_to_roll(initial_q)
+
         # Mixing (M) and unmixing (M_pinv) matrices for X-configured fins
         # Each fin is oriented at 45 degrees to the missile axes
         sin45 = 1.0 / np.sqrt(2.0)
         self.M = np.array([
-            [-1.0,  sin45, -sin45],
-            [-1.0,  sin45,  sin45],
-            [-1.0, -sin45,  sin45],
-            [-1.0, -sin45, -sin45]
+            [ 1.0, -sin45,  sin45],
+            [ 1.0, -sin45, -sin45],
+            [ 1.0,  sin45, -sin45],
+            [ 1.0,  sin45,  sin45]
         ], dtype=float)
         self.M_pinv = np.linalg.pinv(self.M)
 
         self.prev_rel_range = np.inf
+
+    def update(self, target: Target, dt: float):
+        """Updates the missile's guidance, control, and flight phase for a simulation step."""
+        self.update_guidance(target)
+        self.update_control(dt)
+        self.update_flight_phase()
 
     def update_guidance(self, target: Target) -> np.ndarray:
         """Updates the missile's desired lateral acceleration based on the guidance law."""
@@ -123,7 +133,6 @@ class Missile:
         # TODO: Does PN guidance need to take inertial wind velocity into account?
 
         self.a_lat_desired = self.guidance.compute_guidance(self.position(), vi, target.position(), target.velocity())
-        self.update_flight_phase()
 
     def update_control(self, dt: float):
         """Updates the missile's control surface deflections based on the control law to achieve the desired lateral acceleration from the guidance law."""
@@ -149,8 +158,8 @@ class Missile:
         rho = utils.compute_air_density(p[2], self.rho0, self.H_scale)
         P_dyn = 0.5 * rho * vb_rel_mag**2
 
-        # Skid-to-turn (STT) missiles typically command zero roll angle
-        roll_cmd_rad = 0.0
+        # For skid-to-turn (STT) missiles, a simple constant roll angle can be commanded
+        roll_cmd_rad = self.initial_roll_rad
         # NOTE: For feedforward control, we're using CL and CY in the wind frame, but should actually be using CN and CY in the body frame. This appoximation only works for low alpha and beta angles
         # TODO: Think about using a struct/dataclass to pass arguments more cleanly and safely into update() function
         virtual_control_deltas = self.controller.update(roll_cmd_rad, a_cmd_body, a_body, wb, q, P_dyn, self.mass(), self.A_ref, self.CL_delta, self.CL_alpha, self.Cm_delta, self.Cm_alpha, self.CY_delta, self.CY_beta, self.Cn_delta, self.Cn_beta, dt)
@@ -177,8 +186,9 @@ class Missile:
         R_ib = utils.quaternion_to_rotation_matrix(q)  # Body to inertial
         R_bi = R_ib.T # Inertial to body
 
-        # Constant gravity in missile's body frame
+        # Constant gravity in ENU inertial frame (z is up, so gravity is negative)
         Fi_grav = np.array([0.0, 0.0, -m*self.g0], dtype=float)
+        # Constant gravity in missile's body frame
         Fb_grav = R_bi @ Fi_grav
 
         # Thrust force along missile's longitudinal body axis
@@ -239,6 +249,10 @@ class Missile:
         Fw_lift = P_dyn * self.A_ref * CL
 
         # Aerodynamic force vector in the wind (relative velocity) frame
+        # In the FRD (Forward-Right-Down) coordinate system:
+        # - X is forward: Drag acts to oppose motion, so it points backwards (-X), hence -Fw_drag.
+        # - Y is right: Sideslip force acts to the right (+Y), hence +Fw_sideslip.
+        # - Z is down: Lift acts upwards (-Z), hence -Fw_lift.
         Fw_aero = np.array([-Fw_drag, Fw_sideslip, -Fw_lift], dtype=float)
 
         # Transformation of aerodynamic forces from the wind (relative velocity) frame to body frame
