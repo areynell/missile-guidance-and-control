@@ -17,13 +17,13 @@ class MissileController:
 
         # Pitch gains (3-loop acceleration control)
         self.Kdc_pitch = controller_params.Kdc_pitch # DC gain to scale guidance acceleration command into expected acceleration
-        self.Ka_pitch_rate = controller_params.Ka_pitch_rate # Accleration loop gain to convert acceleration error into a pitch rate command
+        self.Ka_pitch_rate = controller_params.Ka_pitch_rate # Acceleration loop gain to convert acceleration error into a pitch rate command
         self.Ki_pitch_rate = controller_params.Ki_pitch_rate # Integral loop gain to eliminate steady-state error in pitch rate tracking
         self.Kr_pitch_rate = controller_params.Kr_pitch_rate # Rate loop gain to convert pitch rate error into a pitch control surface deflection command
 
         # Yaw gains (3-loop acceleration control)
         self.Kdc_yaw = controller_params.Kdc_yaw # DC gain to scale guidance acceleration command into expected acceleration
-        self.Ka_yaw_rate = controller_params.Ka_yaw_rate # Accleration loop gain to convert acceleration error into a yaw rate command
+        self.Ka_yaw_rate = controller_params.Ka_yaw_rate # Acceleration loop gain to convert acceleration error into a yaw rate command
         self.Ki_yaw_rate = controller_params.Ki_yaw_rate # Integral loop gain to eliminate steady-state error in yaw rate tracking
         self.Kr_yaw_rate = controller_params.Kr_yaw_rate # Rate loop gain to convert yaw rate error into a yaw control surface deflection command
 

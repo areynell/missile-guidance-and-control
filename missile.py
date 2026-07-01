@@ -122,7 +122,7 @@ class Missile:
         self.update_control(dt)
         self.update_flight_phase()
 
-    def update_guidance(self, target: Target) -> np.ndarray:
+    def update_guidance(self, target: Target):
         """Updates the missile's desired lateral acceleration based on the guidance law."""
 
         vb = self.velocity()

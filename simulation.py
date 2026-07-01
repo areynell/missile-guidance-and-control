@@ -37,8 +37,8 @@ def log_data(missile_log: dict, target_log: dict, missile: Missile, target: Targ
     missile_log["Fw_aero"].append(Fw_aero)
     missile_log["dynamic_pressure"].append(P_dyn)
 
-    target_log["time"].append(t),
-    target_log["position"].append(target.position()),
+    target_log["time"].append(t)
+    target_log["position"].append(target.position())
     target_log["velocity"].append(target.velocity())
 
 def early_termination(missile: Missile, target: Target, visualizer: SimulationVisualizer, t: float) -> bool:

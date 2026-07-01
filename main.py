@@ -1,4 +1,3 @@
-from numpy import roll
 import numpy as np
 
 from parameters import AerodynamicParams, MissileParams, PropulsionParams, StructuralParams, AtmosphericParams, WarheadParams, ControllerParams, GuidanceParams
@@ -34,7 +33,7 @@ def initialize_missile() -> Missile:
             Cl_0 = 0.0,
             Cl_p = -2.0,
             Cl_delta = 0.5,
-    
+
             # Pitch moment coefficients
             Cm_0 = 0.0,
             Cm_alpha = -2.0,
